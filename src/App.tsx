@@ -72,10 +72,9 @@ export default function App() {
   }, [refresh])
 
   async function callAdmin(payload: Record<string, unknown>) {
-    if (!supabaseUrl || !supabaseKey) throw new Error('Supabase is not configured.')
-    const response = await fetch(`${supabaseUrl}/functions/v1/admin-panel`, {
+    const response = await fetch('/api/admin-panel', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: supabaseKey },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, passcode }),
     })
     const result = await response.json().catch(() => ({})) as { error?: string; role?: Role; data?: unknown }
