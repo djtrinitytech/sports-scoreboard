@@ -21,6 +21,14 @@ Touchline is a mobile-first live scoreboard for the official four-group tourname
    The function uses Supabase's server-side `SUPABASE_SERVICE_ROLE_KEY` runtime secret. Only the function receives that credential. Migration 003 grants its database RPCs to `service_role` only.
 5. Install dependencies and start Vite with `npm install` and `npm run dev`. Vite serves the website; the Supabase Edge Function must be deployed for admin passcodes and score changes.
 
+## Deploy to Vercel
+
+1. Import `djtrinitytech/sports-scoreboard` in Vercel and keep the project root set to the repository root.
+2. Use the Vite framework preset, build command `npm run build`, and output directory `dist` (Vercel can also detect these from the project).
+3. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` under the Vercel project's Environment Variables for the environments you deploy. Use the Supabase project URL and publishable/anon key. These `VITE_` values are public browser configuration; never add a Supabase secret/service-role key or either passcode here.
+4. Deploy the database migrations and `admin-panel` Edge Function to Supabase as described above, with `ADMIN_PASSCODE` and `SUPER_ADMIN_PASSCODE` configured as Supabase Function secrets.
+5. Redeploy after adding or changing environment variables. The included `vercel.json` sends client-side routes to the Vite app entry point so direct links and refreshes work.
+
 ## Access and synchronization
 
 - Admin signs in with the admin passcode. Super admin signs in with the separate super-admin passcode. Both passcodes are checked on the server; they are not bundled into the website. Failed attempts are rate-limited by IP.
