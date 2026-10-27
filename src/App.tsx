@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, Check, CircleHelp, Cloud, Flag, LogIn, LogOut, Minus, Plus, RefreshCw, Shield, ShieldCheck, Wifi, X } from 'lucide-react'
 import { createClient } from '@supabase/supabase-js'
-import { formatTime, type Match, type Team } from './data'
+import { formatTime, type Match, type ShowdownEntry, type Team } from './data'
+import './showdown.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 const db = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null
 type Role = 'admin' | 'super_admin'
-type Filter = 'All matches' | 'Live' | 'Upcoming' | 'Final' | 'Group A' | 'Group B' | 'Group C' | 'Group D'
+type Filter = 'All matches' | 'Max Showdown' | 'Live' | 'Upcoming' | 'Final' | 'Group A' | 'Group B' | 'Group C' | 'Group D'
 const emptyMessage = 'No matches are in the database yet. Apply the official schedule migration to load the groups and fixtures.'
 
 function Crest({ name, teams }: { name: string; teams: Team[] }) {
@@ -22,6 +23,8 @@ function IconButton({ children, onClick, label }: { children: React.ReactNode; o
 export default function App() {
   const [matches, setMatches] = useState<Match[]>([])
   const [teams, setTeams] = useState<Team[]>([])
+  const [showdownEntries, setShowdownEntries] = useState<ShowdownEntry[]>([])
+  const [showdownError, setShowdownError] = useState('')
   const [filter, setFilter] = useState<Filter>('All matches')
   const [panelOpen, setPanelOpen] = useState(false)
   const [passcode, setPasscode] = useState('')
@@ -36,6 +39,10 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState('')
   const [fixture, setFixture] = useState({ home_team: '', away_team: '', event_day: 1, kickoff_time: '', venue: '' })
+  const [showdownName, setShowdownName] = useState('')
+  const [showdownScore, setShowdownScore] = useState('')
+  const [editingShowdownId, setEditingShowdownId] = useState<string | null>(null)
+  const [editingShowdown, setEditingShowdown] = useState({ participant_name: '', score: '' })
   const scoreActionLock = useRef(false)
   const admin = role !== null
   const superAdmin = role === 'super_admin'
@@ -44,10 +51,13 @@ export default function App() {
   const refresh = useCallback(async (quiet = false) => {
     if (!db) { setError('Supabase is not configured. Add the project URL and publishable key to .env.local.'); setLoading(false); return }
     if (!navigator.onLine) { setOnline(false); setLoading(false); return }
-    const [matchResult, teamResult] = await Promise.all([
+    const [matchResult, teamResult, showdownResult] = await Promise.all([
       db.from('matches').select('*').order('event_day', { ascending: true }).order('kickoff_time', { ascending: true }),
       db.from('teams').select('*').eq('active', true).order('group_name', { ascending: true }).order('name', { ascending: true }),
+      db.from('max_showdown_entries').select('*').order('score', { ascending: false }).order('created_at', { ascending: true }),
     ])
+    if (showdownResult.error) setShowdownError(showdownResult.error.message)
+    else { setShowdownEntries((showdownResult.data ?? []) as ShowdownEntry[]); setShowdownError('') }
     const problem = matchResult.error ?? teamResult.error
     if (problem) {
       setError(problem.message); setSyncFailed(true); setSynced(false); setLoading(false)
@@ -65,7 +75,10 @@ export default function App() {
     const onOffline = () => { setOnline(false); setSynced(false) }
     window.addEventListener('online', onOnline); window.addEventListener('offline', onOffline)
     if (!db) return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline) }
-    const channel = db.channel('touchline-matches').on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => { void refresh(true) }).subscribe(status => {
+    const channel = db.channel('touchline-matches')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => { void refresh(true) })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'max_showdown_entries' }, () => { void refresh(true) })
+      .subscribe(status => {
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') { setSyncFailed(true); setSynced(false) }
     })
     return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); void db?.removeChannel(channel) }
@@ -83,6 +96,7 @@ export default function App() {
   }
 
   const filtered = useMemo(() => matches.filter(match => {
+    if (filter === 'Max Showdown') return false
     if (filter === 'All matches') return true
     if (filter === 'Live') return match.status === 'live'
     if (filter === 'Upcoming') return match.status === 'upcoming'
@@ -130,6 +144,38 @@ export default function App() {
     finally { setBusy(false) }
   }
 
+  async function addShowdownEntry(event: React.FormEvent) {
+    event.preventDefault()
+    if (!admin || busy) return
+    setBusy(true); setSyncPending(true)
+    try {
+      await callAdmin({ mode: 'showdown_add', operation_id: crypto.randomUUID(), participant_name: showdownName.trim(), score: Number(showdownScore) })
+      setShowdownName(''); setShowdownScore('')
+      await refresh(true); announce('Max Showdown score saved · Synced')
+    } catch (err) { announce(`Could not save score: ${err instanceof Error ? err.message : 'server error'}`) }
+    finally { setSyncPending(false); setBusy(false) }
+  }
+
+  async function saveShowdownEdit(entryId: string) {
+    if (!superAdmin || busy) return
+    setBusy(true)
+    try {
+      await callAdmin({ mode: 'showdown_edit', entry_id: entryId, participant_name: editingShowdown.participant_name.trim(), score: Number(editingShowdown.score) })
+      setEditingShowdownId(null); await refresh(true); announce('Max Showdown entry corrected · Synced')
+    } catch (err) { announce(`Could not update entry: ${err instanceof Error ? err.message : 'server error'}`) }
+    finally { setBusy(false) }
+  }
+
+  async function deleteShowdownEntry(entryId: string) {
+    if (!superAdmin || busy || !window.confirm('Remove this Max Showdown entry?')) return
+    setBusy(true)
+    try {
+      await callAdmin({ mode: 'showdown_delete', entry_id: entryId })
+      await refresh(true); announce('Max Showdown entry removed · Synced')
+    } catch (err) { announce(`Could not remove entry: ${err instanceof Error ? err.message : 'server error'}`) }
+    finally { setBusy(false) }
+  }
+
   return <div className="board-shell">
     <header className="board-header">
       <div className="board-brand"><span className="board-mark"><Activity size={20} /></span><span>TOUCHLINE <small>LIVE SCORES</small></span></div>
@@ -140,13 +186,20 @@ export default function App() {
       <div className="board-title-row"><div><div className="kicker">COMMUNITY LEAGUE</div><h1>Live <span>scoreboard</span></h1><p>Live scores, upcoming fixtures and final results from the league.</p></div><button className="refresh-button" onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /> Refresh</button></div>
       <div className="board-status-row"><div className="live-indicator"><i /> {liveCount} LIVE {liveCount === 1 ? 'MATCH' : 'MATCHES'}</div><span>{synced ? <><Wifi size={14} /> Last checked {new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</> : <><Cloud size={14} /> Waiting for server confirmation</>}</span></div>
       {error && <div className="error-banner"><CircleHelp size={18} /><div><b>Could not load league data</b><span>{error}</span>{error.includes('relation') && <span>Apply the SQL migrations in Supabase, then refresh.</span>}</div><button onClick={() => void refresh()}>Retry</button></div>}
-      <div className="filter-bar">{(['All matches', 'Live', 'Upcoming', 'Final', 'Group A', 'Group B', 'Group C', 'Group D'] as Filter[]).map(item => <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}{item === 'Live' && liveCount > 0 && <i>{liveCount}</i>}</button>)}<span className="match-total">{filtered.length} MATCHES</span></div>
-      <section className="match-board" aria-label="League matches">{loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading scores from Supabase…</div> : filtered.length === 0 ? <div className="board-empty"><Shield size={22} /><b>{matches.length === 0 ? emptyMessage : 'No matches in this filter.'}</b></div> : filtered.map(match => <article className={`match-row ${match.status === 'live' ? 'row-live' : ''}`} key={match.id}>
+      <div className="filter-bar">{(['All matches', 'Max Showdown', 'Live', 'Upcoming', 'Final', 'Group A', 'Group B', 'Group C', 'Group D'] as Filter[]).map(item => <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}{item === 'Live' && liveCount > 0 && <i>{liveCount}</i>}</button>)}<span className="match-total">{filter === 'Max Showdown' ? `${showdownEntries.length} ENTRIES` : `${filtered.length} MATCHES`}</span></div>
+      {filter === 'Max Showdown' ? <section className="showdown-board" aria-label="Max Showdown results">
+        <div className="showdown-heading"><div><span className="kicker">PANNA COMPETITION</span><h2>Max Showdown</h2><p>Player scores and leaderboard</p></div><span className="showdown-count">{showdownEntries.length} {showdownEntries.length === 1 ? 'PLAYER' : 'PLAYERS'}</span></div>
+        {showdownError && <div className="error-banner"><CircleHelp size={18} /><div><b>Max Showdown is not set up yet</b><span>Apply migration 004 in the Supabase SQL Editor, then refresh.</span></div><button onClick={() => void refresh()}>Retry</button></div>}
+        {admin ? <form className="showdown-entry-form" onSubmit={event => void addShowdownEntry(event)}><label>Player name<input required maxLength={80} value={showdownName} onChange={event => setShowdownName(event.target.value)} placeholder="Enter player name" /></label><label>Score<input required type="number" min="0" step="1" value={showdownScore} onChange={event => setShowdownScore(event.target.value)} placeholder="0" /></label><button className="panel-action" disabled={busy || !showdownName.trim() || showdownScore === ''}>{busy ? 'Saving…' : 'Add score'}</button></form> : <div className="showdown-volunteer-note"><Shield size={16} /><span>Volunteers need Admin access to enter scores.</span><button onClick={() => { setPanelOpen(true); setLoginError('') }}>Admin sign in</button></div>}
+        <div className="showdown-list">{showdownEntries.map((entry, index) => <article className="showdown-entry" key={entry.id}>
+          {editingShowdownId === entry.id ? <><label>Player name<input maxLength={80} value={editingShowdown.participant_name} onChange={event => setEditingShowdown({ ...editingShowdown, participant_name: event.target.value })} /></label><label>Score<input type="number" min="0" step="1" value={editingShowdown.score} onChange={event => setEditingShowdown({ ...editingShowdown, score: event.target.value })} /></label><button className="entry-save" disabled={busy} onClick={() => void saveShowdownEdit(entry.id)}>Save</button><button className="entry-cancel" onClick={() => setEditingShowdownId(null)}>Cancel</button></> : <><span className="showdown-rank">{index + 1}</span><span className="showdown-player">{entry.participant_name}</span><b className="showdown-score">{entry.score}</b>{superAdmin && <div className="showdown-actions"><button onClick={() => { setEditingShowdownId(entry.id); setEditingShowdown({ participant_name: entry.participant_name, score: String(entry.score) }) }}>Edit</button><button onClick={() => void deleteShowdownEntry(entry.id)} disabled={busy}>Remove</button></div>}</>}
+        </article>)}{!showdownError && showdownEntries.length === 0 && <div className="board-empty"><b>No scores entered yet.</b><span>Scores will appear here as volunteers add them.</span></div>}</div>
+      </section> : <section className="match-board" aria-label="League matches">{loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading scores from Supabase…</div> : filtered.length === 0 ? <div className="board-empty"><Shield size={22} /><b>{matches.length === 0 ? emptyMessage : 'No matches in this filter.'}</b></div> : filtered.map(match => <article className={`match-row ${match.status === 'live' ? 'row-live' : ''}`} key={match.id}>
         <div className="match-meta"><span className={`status-label ${match.status}`}>{match.status === 'live' && <i />}{match.status === 'final' ? 'FINAL' : match.status === 'live' ? 'LIVE' : 'UPCOMING'}</span><span>DAY {match.event_day} · {formatTime(match.kickoff_time)}</span>{match.group_name && <span className="group-tag">GROUP {match.group_name}</span>}<span className="venue-label">{match.venue}</span></div>
         <div className="match-scoreline"><div className="match-team"><Crest name={match.home_team} teams={teams} /><b>{match.home_team}</b></div><strong className="score-value">{match.status === 'upcoming' ? <span className="versus">VS</span> : <>{match.home_score}<em>:</em>{match.away_score}</>}</strong><div className="match-team away"><Crest name={match.away_team} teams={teams} /><b>{match.away_team}</b></div></div>
         {admin && <div className="score-edit"><div className="score-side"><span>{teams.find(team => team.name === match.home_team)?.short_name}</span><button disabled={busy || (match.status === 'final' && !superAdmin) || match.home_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.home_team })} aria-label={`Subtract goal from ${match.home_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.home_team })} aria-label={`Add goal for ${match.home_team}`}><Plus size={17} /></button></div><span className="edit-caption">EDIT SCORE</span><div className="score-side"><button disabled={busy || (match.status === 'final' && !superAdmin) || match.away_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.away_team })} aria-label={`Subtract goal from ${match.away_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.away_team })} aria-label={`Add goal for ${match.away_team}`}><Plus size={17} /></button><span>{teams.find(team => team.name === match.away_team)?.short_name}</span></div><div className="status-actions">{match.status !== 'live' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Start</button>}{match.status !== 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'final' })} disabled={busy}><Flag size={13} /> Final</button>}{superAdmin && match.status === 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Reopen</button>}</div></div>}
-      </article>)}</section>
-      {!admin && <div className="readonly-note"><Shield size={15} /> Public scoreboard · read only</div>}
+      </article>)}</section>}
+      {!admin && filter !== 'Max Showdown' && <div className="readonly-note"><Shield size={15} /> Public scoreboard · read only</div>}
       <footer className="board-footer">TOUCHLINE · LIVE LEAGUE DATA <span>{synced ? <><Check size={13} /> SYNCED WITH SUPABASE</> : stateLabel.toUpperCase()}</span></footer>
     </main>
     {panelOpen && <div className="panel-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPanelOpen(false) }}><aside className="admin-panel" role="dialog" aria-modal="true" aria-label="Admin panel">

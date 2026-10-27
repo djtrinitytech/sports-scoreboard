@@ -44,7 +44,8 @@ export default async function adminPanel(req, res) {
 
   let body
   try {
-    body = await readBody(req)
+    const parsedBody = await readBody(req)
+    body = parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody) ? parsedBody : {}
   } catch {
     return send(res, 400, { error: 'Invalid request body.' })
   }
@@ -102,6 +103,44 @@ export default async function adminPanel(req, res) {
     })
     if (error) return send(res, 400, { error: error.message })
     return send(res, 200, { role, data })
+  }
+
+  if (body.mode === 'showdown_add') {
+    const participantName = typeof body.participant_name === 'string' ? body.participant_name.trim() : ''
+    const score = Number(body.score)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.operation_id ?? '') || participantName.length < 1 || participantName.length > 80 || !Number.isInteger(score) || score < 0) {
+      return send(res, 400, { error: 'Enter a name up to 80 characters and a whole-number score of zero or more.' })
+    }
+    const { data: inserted, error: insertError } = await client
+      .from('max_showdown_entries')
+      .upsert({ operation_id: body.operation_id, participant_name: participantName, score }, { onConflict: 'operation_id', ignoreDuplicates: true })
+      .select('*')
+      .maybeSingle()
+    if (insertError) return send(res, 400, { error: insertError.message })
+    if (inserted) return send(res, 200, { role, data: inserted })
+    const { data, error } = await client.from('max_showdown_entries').select('*').eq('operation_id', body.operation_id).single()
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
+  if (body.mode === 'showdown_edit') {
+    if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
+    const participantName = typeof body.participant_name === 'string' ? body.participant_name.trim() : ''
+    const score = Number(body.score)
+    if (typeof body.entry_id !== 'string' || participantName.length < 1 || participantName.length > 80 || !Number.isInteger(score) || score < 0) {
+      return send(res, 400, { error: 'Enter a name up to 80 characters and a whole-number score of zero or more.' })
+    }
+    const { data, error } = await client.from('max_showdown_entries').update({ participant_name: participantName, score, updated_at: new Date().toISOString() }).eq('id', body.entry_id).select('*').single()
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
+  if (body.mode === 'showdown_delete') {
+    if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
+    if (typeof body.entry_id !== 'string') return send(res, 400, { error: 'Invalid Max Showdown entry.' })
+    const { error } = await client.from('max_showdown_entries').delete().eq('id', body.entry_id)
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data: { id: body.entry_id } })
   }
 
   return send(res, 400, { error: 'Unsupported request.' })
