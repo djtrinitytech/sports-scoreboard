@@ -1,8 +1,8 @@
 import { buildStandings } from './standings'
-import type { Match, Team } from './data'
+import { teamDisplayName, type Match, type Team } from './data'
 import './points-table.css'
 
-export function PointsTable({ teams, matches }: { teams: Team[]; matches: Match[] }) {
+export function PointsTable({ teams, matches, showFullNames }: { teams: Team[]; matches: Match[]; showFullNames: boolean }) {
   const groups = buildStandings(teams, matches)
   return <section className="points-board" aria-label="Group points tables">
     <div className="points-heading">
@@ -18,11 +18,11 @@ export function PointsTable({ teams, matches }: { teams: Team[]; matches: Match[
             <tbody>{rows.map(row => {
               const status = row.tieUnresolved ? 'Tie unresolved' : row.groupComplete ? row.position <= 2 ? 'Top 2 · Final' : 'Outside top 2' : row.position <= 2 ? 'Top 2' : 'Chasing'
               return <tr key={row.team.id} className={row.position <= 2 ? 'qualification-place' : ''}>
-                <td className="position-cell">{row.position}</td><th scope="row" className="team-column team-name">{row.team.name}</th>
+                <td className="position-cell">{row.position}</td><th scope="row" className="team-column team-name">{teamDisplayName(row.team.name, teams, showFullNames)}</th>
                 <td>{row.played}</td><td>{row.won}</td><td>{row.drawn}</td><td>{row.lost}</td><td>{row.goalsFor}</td><td>{row.goalsAgainst}</td><td className="goal-difference">{row.goalsFor - row.goalsAgainst > 0 ? '+' : ''}{row.goalsFor - row.goalsAgainst}</td><td className="points-total">{row.points}</td>
                 <td><span className="form-list" aria-label={`Recent form: ${row.form.join(', ') || 'none'}`}>{row.form.length ? row.form.map((result, index) => <i key={`${row.team.id}-${index}`} className={`form-${result.toLowerCase()}`} title={result === 'W' ? 'Win' : result === 'D' ? 'Draw' : 'Loss'}>{result}</i>) : <span className="no-form">—</span>}</span></td>
                 <td>{row.yellowCards}</td><td>{row.redCards}</td><td>{row.fairPlay > 0 ? '+' : ''}{row.fairPlay}</td><td><span className={`standing-status ${status.startsWith('Top 2') ? 'qualified' : status === 'Outside top 2' ? 'eliminated' : status === 'Tie unresolved' ? 'tie-pending' : ''}`}>{status}</span></td>
-                <td className="tie-detail-cell"><details><summary aria-label={`Tie-break details for ${row.team.name}`}>Details</summary><div className="tie-detail-popover"><b>Head-to-head</b><span>{row.headToHeadPoints} pts · {row.headToHeadGoalDifference > 0 ? '+' : ''}{row.headToHeadGoalDifference} GD · {row.headToHeadGoals} GF</span><small>Among teams currently level on points</small></div></details></td>
+                <td className="tie-detail-cell"><details><summary aria-label={`Tie-break details for ${teamDisplayName(row.team.name, teams, showFullNames)}`}>Details</summary><div className="tie-detail-popover"><b>Head-to-head</b><span>{row.headToHeadPoints} pts · {row.headToHeadGoalDifference > 0 ? '+' : ''}{row.headToHeadGoalDifference} GD · {row.headToHeadGoals} GF</span><small>Among teams currently level on points</small></div></details></td>
               </tr>
             })}</tbody>
           </table>
