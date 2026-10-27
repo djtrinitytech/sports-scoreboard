@@ -88,6 +88,14 @@ export default async function adminPanel(req, res) {
     return send(res, 200, { role, data })
   }
 
+  if (body.mode === 'match_cards') {
+    const { match_id: matchId, expected_version: expectedVersion, home_yellow_cards: homeYellowCards, away_yellow_cards: awayYellowCards, home_red_cards: homeRedCards, away_red_cards: awayRedCards, home_fair_play_score: homeFairPlay, away_fair_play_score: awayFairPlay } = body
+    if (typeof matchId !== 'string' || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(homeYellowCards) || homeYellowCards < 0 || !Number.isSafeInteger(awayYellowCards) || awayYellowCards < 0 || !Number.isSafeInteger(homeRedCards) || homeRedCards < 0 || !Number.isSafeInteger(awayRedCards) || awayRedCards < 0 || !Number.isSafeInteger(homeFairPlay) || !Number.isSafeInteger(awayFairPlay)) return send(res, 400, { error: 'Enter non-negative whole-number card totals and fair-play points.' })
+    const { data, error } = await client.rpc('update_match_discipline_server', { p_match_id: matchId, p_expected_version: expectedVersion, p_home_yellow_cards: homeYellowCards, p_away_yellow_cards: awayYellowCards, p_home_red_cards: homeRedCards, p_away_red_cards: awayRedCards, p_home_fair_play_score: homeFairPlay, p_away_fair_play_score: awayFairPlay, p_actor_role: role })
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
   if (body.mode === 'match_edit') {
     if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
     const { match_id: matchId, expected_version: expectedVersion, home_team: homeTeam, away_team: awayTeam, home_score: homeScore, away_score: awayScore, home_yellow_cards: homeYellowCards, away_yellow_cards: awayYellowCards, home_red_cards: homeRedCards, away_red_cards: awayRedCards, home_fair_play_score: homeFairPlay, away_fair_play_score: awayFairPlay, status, event_day: eventDay, kickoff_time: kickoffTime, venue, stage } = body
@@ -134,42 +142,65 @@ export default async function adminPanel(req, res) {
     return send(res, 200, { role, data })
   }
 
-  if (body.mode === 'showdown_add') {
-    const participantName = typeof body.participant_name === 'string' ? body.participant_name.trim() : ''
-    const score = Number(body.score)
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.operation_id ?? '') || participantName.length < 1 || participantName.length > 80 || !Number.isInteger(score) || score < 0) {
-      return send(res, 400, { error: 'Enter a name up to 80 characters and a whole-number score of zero or more.' })
-    }
-    const { data: inserted, error: insertError } = await client
-      .from('max_showdown_entries')
-      .upsert({ operation_id: body.operation_id, participant_name: participantName, score }, { onConflict: 'operation_id', ignoreDuplicates: true })
-      .select('*')
-      .maybeSingle()
-    if (insertError) return send(res, 400, { error: insertError.message })
-    if (inserted) return send(res, 200, { role, data: inserted })
-    const { data, error } = await client.from('max_showdown_entries').select('*').eq('operation_id', body.operation_id).single()
+  if (body.mode === 'showdown_admin_data') {
+    const [players, matches] = await Promise.all([
+      client.from('max_showdown_players').select('*').order('created_at', { ascending: false }),
+      client.from('max_showdown_matches').select('*').order('created_at', { ascending: false }),
+    ])
+    const problem = players.error ?? matches.error
+    if (problem) return send(res, 400, { error: problem.message })
+    return send(res, 200, { role, players: players.data ?? [], matches: matches.data ?? [] })
+  }
+
+  if (body.mode === 'showdown_register') {
+    const fullName = typeof body.full_name === 'string' ? body.full_name.trim() : ''
+    const college = typeof body.college_name === 'string' ? body.college_name.trim() : ''
+    const phone = typeof body.phone_number === 'string' ? body.phone_number.trim() : ''
+    if (fullName.length < 1 || fullName.length > 100 || college.length > 120 || phone.length < 5 || phone.length > 30) return send(res, 400, { error: 'Enter a full name, a valid phone number, and an optional college (up to 120 characters).' })
+    const { data, error } = await client.rpc('register_max_showdown_player_server', { p_full_name: fullName, p_college_name: college || null, p_phone_number: phone })
     if (error) return send(res, 400, { error: error.message })
     return send(res, 200, { role, data })
   }
 
-  if (body.mode === 'showdown_edit') {
+  if (body.mode === 'showdown_player_edit') {
     if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
-    const participantName = typeof body.participant_name === 'string' ? body.participant_name.trim() : ''
-    const score = Number(body.score)
-    if (typeof body.entry_id !== 'string' || participantName.length < 1 || participantName.length > 80 || !Number.isInteger(score) || score < 0) {
-      return send(res, 400, { error: 'Enter a name up to 80 characters and a whole-number score of zero or more.' })
-    }
-    const { data, error } = await client.from('max_showdown_entries').update({ participant_name: participantName, score, updated_at: new Date().toISOString() }).eq('id', body.entry_id).select('*').single()
+    const fullName = typeof body.full_name === 'string' ? body.full_name.trim() : ''
+    const college = typeof body.college_name === 'string' ? body.college_name.trim() : ''
+    const phone = typeof body.phone_number === 'string' ? body.phone_number.trim() : ''
+    if (typeof body.player_id !== 'string' || fullName.length < 1 || fullName.length > 100 || college.length > 120 || phone.length < 5 || phone.length > 30) return send(res, 400, { error: 'Enter a full name, a valid phone number, and an optional college.' })
+    const { data, error } = await client.rpc('correct_max_showdown_player_server', { p_player_id: body.player_id, p_full_name: fullName, p_college_name: college || null, p_phone_number: phone })
     if (error) return send(res, 400, { error: error.message })
     return send(res, 200, { role, data })
   }
 
-  if (body.mode === 'showdown_delete') {
-    if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
-    if (typeof body.entry_id !== 'string') return send(res, 400, { error: 'Invalid Max Showdown entry.' })
-    const { error } = await client.from('max_showdown_entries').delete().eq('id', body.entry_id)
+  if (body.mode === 'showdown_fixture') {
+    if (typeof body.player_one_id !== 'string' || typeof body.player_two_id !== 'string') return send(res, 400, { error: 'Choose two registered players.' })
+    const { data, error } = await client.rpc('create_max_showdown_match_server', { p_player_one_id: body.player_one_id, p_player_two_id: body.player_two_id, p_actor_role: role })
     if (error) return send(res, 400, { error: error.message })
-    return send(res, 200, { role, data: { id: body.entry_id } })
+    return send(res, 200, { role, data })
+  }
+
+  if (body.mode === 'showdown_status') {
+    if (typeof body.match_id !== 'string' || !Number.isSafeInteger(body.expected_version) || !['live', 'final'].includes(body.status)) return send(res, 400, { error: 'Invalid Max Showdown match status.' })
+    const { data, error } = await client.rpc('set_max_showdown_match_status_server', { p_match_id: body.match_id, p_expected_version: body.expected_version, p_status: body.status })
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
+  if (body.mode === 'showdown_score') {
+    if (typeof body.operation_id !== 'string' || typeof body.match_id !== 'string' || typeof body.player_id !== 'string' || !Number.isSafeInteger(body.expected_version) || !['goal', 'panna'].includes(body.action_type)) return send(res, 400, { error: 'Invalid Max Showdown score action.' })
+    const { data, error } = await client.rpc('apply_max_showdown_score_server', { p_operation_id: body.operation_id, p_match_id: body.match_id, p_expected_version: body.expected_version, p_player_id: body.player_id, p_action_type: body.action_type, p_actor_role: role })
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
+  if (body.mode === 'showdown_match_correct') {
+    if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
+    const fields = ['player_one_points', 'player_two_points', 'player_one_goals', 'player_two_goals', 'player_one_pannas', 'player_two_pannas']
+    if (typeof body.match_id !== 'string' || !Number.isSafeInteger(body.expected_version) || fields.some(field => !Number.isSafeInteger(body[field]) || body[field] < 0) || !['draft', 'live', 'final'].includes(body.status)) return send(res, 400, { error: 'Enter valid non-negative scores and match stats.' })
+    const { data, error } = await client.rpc('correct_max_showdown_match_server', { p_match_id: body.match_id, p_expected_version: body.expected_version, p_one_points: body.player_one_points, p_two_points: body.player_two_points, p_one_goals: body.player_one_goals, p_two_goals: body.player_two_goals, p_one_pannas: body.player_one_pannas, p_two_pannas: body.player_two_pannas, p_status: body.status })
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
   }
 
   return send(res, 400, { error: 'Unsupported request.' })

@@ -22,6 +22,9 @@ export type Match = {
 }
 export type Team = { id: string; name: string; short_name: string; color: string; group_name: string | null; active: boolean }
 export type ShowdownEntry = { id: string; operation_id: string; participant_name: string; score: number; created_at: string; updated_at: string }
+export type ShowdownPlayer = { id: string; registration_id: string; full_name: string; college_name: string | null; phone_number: string | null; legacy_points: number; created_at: string }
+export type ShowdownMatch = { id: string; player_one_id: string; player_two_id: string; status: 'draft' | 'live' | 'final'; player_one_points: number; player_two_points: number; player_one_goals: number; player_two_goals: number; player_one_pannas: number; player_two_pannas: number; version: number; created_at: string }
+export type ShowdownStanding = { player_id: string; registration_id: string; full_name: string; college_name: string | null; played: number; wins: number; draws: number; losses: number; goals: number; pannas: number; legacy_points: number; scored_points: number; tournament_points: number }
 export function teamDisplayName(name: string, teams: Team[], showFullName: boolean) {
   const team = teams.find(item => item.name === name)
   return team ? showFullName ? team.name : team.short_name : name

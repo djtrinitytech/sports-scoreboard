@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, Check, CircleHelp, Cloud, Flag, LogIn, LogOut, Minus, Plus, RefreshCw, Shield, ShieldCheck, Wifi, X } from 'lucide-react'
 import { createClient } from '@supabase/supabase-js'
-import { formatTime, teamDisplayName, type Match, type ShowdownEntry, type Team } from './data'
+import { formatTime, teamDisplayName, type Match, type Team } from './data'
 import { PointsTable } from './PointsTable'
+import { MaxShowdown } from './MaxShowdown'
 import './showdown.css'
+import './responsive.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
@@ -11,6 +13,7 @@ const db = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) :
 type Role = 'admin' | 'super_admin'
 type Filter = 'Points Table' | 'All matches' | 'Max Showdown' | 'Live' | 'Upcoming' | 'Final' | 'Group A' | 'Group B' | 'Group C' | 'Group D'
 type MatchCorrection = { home_team: string; away_team: string; home_score: string; away_score: string; home_yellow_cards: string; away_yellow_cards: string; home_red_cards: string; away_red_cards: string; home_fair_play_score: string; away_fair_play_score: string; status: Match['status']; event_day: string; kickoff_time: string; venue: string; stage: string }
+type MatchCards = Pick<MatchCorrection, 'home_yellow_cards' | 'away_yellow_cards' | 'home_red_cards' | 'away_red_cards' | 'home_fair_play_score' | 'away_fair_play_score'>
 const emptyMessage = 'No matches are in the database yet. Apply the official schedule migration to load the groups and fixtures.'
 
 function Crest({ name, teams }: { name: string; teams: Team[] }) {
@@ -25,8 +28,6 @@ function IconButton({ children, onClick, label }: { children: React.ReactNode; o
 export default function App() {
   const [matches, setMatches] = useState<Match[]>([])
   const [teams, setTeams] = useState<Team[]>([])
-  const [showdownEntries, setShowdownEntries] = useState<ShowdownEntry[]>([])
-  const [showdownError, setShowdownError] = useState('')
   const [filter, setFilter] = useState<Filter>('Points Table')
   const [panelOpen, setPanelOpen] = useState(false)
   const [passcode, setPasscode] = useState('')
@@ -41,11 +42,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState('')
   const [fixture, setFixture] = useState({ home_team: '', away_team: '', event_day: 1, kickoff_time: '', venue: '' })
-  const [showdownName, setShowdownName] = useState('')
-  const [showdownScore, setShowdownScore] = useState('')
-  const [editingShowdownId, setEditingShowdownId] = useState<string | null>(null)
-  const [editingShowdown, setEditingShowdown] = useState({ participant_name: '', score: '' })
   const [editingMatchId, setEditingMatchId] = useState<string | null>(null)
+  const [editingCardsId, setEditingCardsId] = useState<string | null>(null)
+  const [cardCorrection, setCardCorrection] = useState<MatchCards>({ home_yellow_cards: '0', away_yellow_cards: '0', home_red_cards: '0', away_red_cards: '0', home_fair_play_score: '0', away_fair_play_score: '0' })
   const [matchCorrection, setMatchCorrection] = useState<MatchCorrection>({ home_team: '', away_team: '', home_score: '0', away_score: '0', home_yellow_cards: '0', away_yellow_cards: '0', home_red_cards: '0', away_red_cards: '0', home_fair_play_score: '0', away_fair_play_score: '0', status: 'upcoming', event_day: '1', kickoff_time: '', venue: '', stage: 'group' })
   const scoreActionLock = useRef(false)
   const admin = role !== null
@@ -55,13 +54,10 @@ export default function App() {
   const refresh = useCallback(async (quiet = false) => {
     if (!db) { setError('Supabase is not configured. Add the project URL and publishable key to .env.local.'); setLoading(false); return }
     if (!navigator.onLine) { setOnline(false); setLoading(false); return }
-    const [matchResult, teamResult, showdownResult] = await Promise.all([
+    const [matchResult, teamResult] = await Promise.all([
       db.from('matches').select('*').order('event_day', { ascending: true }).order('kickoff_time', { ascending: true }),
       db.from('teams').select('*').eq('active', true).order('group_name', { ascending: true }).order('name', { ascending: true }),
-      db.from('max_showdown_entries').select('*').order('score', { ascending: false }).order('created_at', { ascending: true }),
     ])
-    if (showdownResult.error) setShowdownError(showdownResult.error.message)
-    else { setShowdownEntries((showdownResult.data ?? []) as ShowdownEntry[]); setShowdownError('') }
     const problem = matchResult.error ?? teamResult.error
     if (problem) {
       setError(problem.message); setSyncFailed(true); setSynced(false); setLoading(false)
@@ -81,7 +77,6 @@ export default function App() {
     if (!db) return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline) }
     const channel = db.channel('touchline-matches')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => { void refresh(true) })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'max_showdown_entries' }, () => { void refresh(true) })
       .subscribe(status => {
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') { setSyncFailed(true); setSynced(false) }
     })
@@ -124,11 +119,19 @@ export default function App() {
 
   async function changeMatch(match: Match, action: 'goal' | 'undo' | 'status', payload: Record<string, unknown>) {
     if (!admin || busy || scoreActionLock.current) return
+    const optimistic: Match = { ...match, version: match.version + 1 }
+    if (action === 'goal' || action === 'undo') {
+      if (payload.team === match.home_team) optimistic.home_score = match.home_score + (action === 'goal' ? 1 : -1)
+      else if (payload.team === match.away_team) optimistic.away_score = match.away_score + (action === 'goal' ? 1 : -1)
+    } else optimistic.status = payload.status as Match['status']
+    setMatches(current => current.map(item => item.id === match.id ? optimistic : item))
     scoreActionLock.current = true; setBusy(true); setSyncPending(true)
     try {
-      await callAdmin({ mode: 'score', operation_id: crypto.randomUUID(), match_id: match.id, action_type: action, payload: { ...payload, expected_version: match.version } })
-      await refresh(true); announce('Score saved · Synced')
+      const result = await callAdmin({ mode: 'score', operation_id: crypto.randomUUID(), match_id: match.id, action_type: action, payload: { ...payload, expected_version: match.version } })
+      const saved = result.data as Match
+      setMatches(current => current.map(item => item.id === match.id ? saved : item)); announce('Score saved · Synced')
     } catch (err) {
+      setMatches(current => current.map(item => item.id === match.id ? match : item))
       setSyncFailed(true); setSynced(false)
       const message = err instanceof Error ? err.message : 'Server did not confirm the score.'
       announce(message.toLowerCase().includes('version conflict') ? 'This match changed elsewhere. Refreshed the server score.' : `Sync Failed · ${message}`)
@@ -156,6 +159,27 @@ export default function App() {
     } finally { setSyncPending(false); setBusy(false) }
   }
 
+  function beginCardCorrection(match: Match) {
+    setEditingCardsId(match.id)
+    setCardCorrection({ home_yellow_cards: String(match.home_yellow_cards ?? 0), away_yellow_cards: String(match.away_yellow_cards ?? 0), home_red_cards: String(match.home_red_cards ?? 0), away_red_cards: String(match.away_red_cards ?? 0), home_fair_play_score: String(match.home_fair_play_score ?? 0), away_fair_play_score: String(match.away_fair_play_score ?? 0) })
+  }
+
+  async function saveMatchCards(event: React.FormEvent) {
+    event.preventDefault()
+    const match = matches.find(item => item.id === editingCardsId)
+    if (!admin || !match || busy) return
+    const previous = match
+    const optimistic = { ...match, ...Object.fromEntries(Object.entries(cardCorrection).map(([key, value]) => [key, Number(value)])) } as Match
+    setMatches(current => current.map(item => item.id === match.id ? optimistic : item)); setBusy(true); setSyncPending(true)
+    try {
+      const result = await callAdmin({ mode: 'match_cards', match_id: match.id, expected_version: match.version, ...Object.fromEntries(Object.entries(cardCorrection).map(([key, value]) => [key, Number(value)])) })
+      const saved = result.data as Match
+      setMatches(current => current.map(item => item.id === match.id ? saved : item)); setEditingCardsId(null); announce('Cards corrected · Synced')
+    } catch (err) {
+      setMatches(current => current.map(item => item.id === match.id ? previous : item)); announce(`Could not update cards: ${err instanceof Error ? err.message : 'server error'}`); await refresh(true)
+    } finally { setSyncPending(false); setBusy(false) }
+  }
+
   async function createFixture(event: React.FormEvent) {
     event.preventDefault()
     if (!superAdmin || busy) return
@@ -168,38 +192,6 @@ export default function App() {
     finally { setBusy(false) }
   }
 
-  async function addShowdownEntry(event: React.FormEvent) {
-    event.preventDefault()
-    if (!admin || busy) return
-    setBusy(true); setSyncPending(true)
-    try {
-      await callAdmin({ mode: 'showdown_add', operation_id: crypto.randomUUID(), participant_name: showdownName.trim(), score: Number(showdownScore) })
-      setShowdownName(''); setShowdownScore('')
-      await refresh(true); announce('Max Showdown score saved · Synced')
-    } catch (err) { announce(`Could not save score: ${err instanceof Error ? err.message : 'server error'}`) }
-    finally { setSyncPending(false); setBusy(false) }
-  }
-
-  async function saveShowdownEdit(entryId: string) {
-    if (!superAdmin || busy) return
-    setBusy(true)
-    try {
-      await callAdmin({ mode: 'showdown_edit', entry_id: entryId, participant_name: editingShowdown.participant_name.trim(), score: Number(editingShowdown.score) })
-      setEditingShowdownId(null); await refresh(true); announce('Max Showdown entry corrected · Synced')
-    } catch (err) { announce(`Could not update entry: ${err instanceof Error ? err.message : 'server error'}`) }
-    finally { setBusy(false) }
-  }
-
-  async function deleteShowdownEntry(entryId: string) {
-    if (!superAdmin || busy || !window.confirm('Remove this Max Showdown entry?')) return
-    setBusy(true)
-    try {
-      await callAdmin({ mode: 'showdown_delete', entry_id: entryId })
-      await refresh(true); announce('Max Showdown entry removed · Synced')
-    } catch (err) { announce(`Could not remove entry: ${err instanceof Error ? err.message : 'server error'}`) }
-    finally { setBusy(false) }
-  }
-
   return <div className="board-shell">
     <header className="board-header">
       <div className="board-brand"><span className="board-mark"><Activity size={20} /></span><span>VYUHA <small>LIVE SCORES</small></span><img className="trinity-logo" src="/trinity-logo.webp" alt="Trinity" /></div>
@@ -208,25 +200,28 @@ export default function App() {
     </header>
     <main className="board-content">
       <div className="board-title-row"><div><div className="kicker">COMMUNITY LEAGUE</div><h1>Live <span>scoreboard</span></h1><p>Live scores, upcoming fixtures and final results from the league.</p></div><button className="refresh-button" onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /> Refresh</button></div>
-      <div className="board-status-row"><div className="live-indicator"><i /> {liveCount} LIVE {liveCount === 1 ? 'MATCH' : 'MATCHES'}</div><span>{synced ? <><Wifi size={14} /> Last checked {new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</> : <><Cloud size={14} /> Waiting for server confirmation</>}</span></div>
+      <div className="board-status-row"><div className="live-indicator"><i /> {liveCount} LIVE {liveCount === 1 ? 'MATCH' : 'MATCHES'}</div><button className="showdown-shortcut" onClick={() => setFilter('Max Showdown')}>Max Showdown <span>PLAYER STANDINGS</span></button><span>{synced ? <><Wifi size={14} /> Last checked {new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</> : <><Cloud size={14} /> Waiting for server confirmation</>}</span></div>
       {error && <div className="error-banner"><CircleHelp size={18} /><div><b>Could not load league data</b><span>{error}</span>{error.includes('relation') && <span>Apply the SQL migrations in Supabase, then refresh.</span>}</div><button onClick={() => void refresh()}>Retry</button></div>}
-      <div className="filter-bar">{(['Points Table', 'All matches', 'Max Showdown', 'Live', 'Upcoming', 'Final', 'Group A', 'Group B', 'Group C', 'Group D'] as Filter[]).map(item => <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}{item === 'Live' && liveCount > 0 && <i>{liveCount}</i>}</button>)}<span className="match-total">{filter === 'Points Table' ? '4 GROUPS' : filter === 'Max Showdown' ? `${showdownEntries.length} ENTRIES` : `${filtered.length} MATCHES`}</span></div>
-      {filter === 'Points Table' ? loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading points table from Supabase…</div> : <PointsTable teams={teams} matches={matches} showFullNames={admin} /> : filter === 'Max Showdown' ? <section className="showdown-board" aria-label="Max Showdown results">
-        <div className="showdown-heading"><div><span className="kicker">PANNA COMPETITION</span><h2>Max Showdown</h2><p>Player scores and leaderboard</p></div><span className="showdown-count">{showdownEntries.length} {showdownEntries.length === 1 ? 'PLAYER' : 'PLAYERS'}</span></div>
-        {showdownError && <div className="error-banner"><CircleHelp size={18} /><div><b>Max Showdown is not set up yet</b><span>Apply migration 004 in the Supabase SQL Editor, then refresh.</span></div><button onClick={() => void refresh()}>Retry</button></div>}
-        {admin ? <form className="showdown-entry-form" onSubmit={event => void addShowdownEntry(event)}><label>Player name<input required maxLength={80} value={showdownName} onChange={event => setShowdownName(event.target.value)} placeholder="Enter player name" /></label><label>Score<input required type="number" min="0" step="1" value={showdownScore} onChange={event => setShowdownScore(event.target.value)} placeholder="0" /></label><button className="panel-action" disabled={busy || !showdownName.trim() || showdownScore === ''}>{busy ? 'Saving…' : 'Add score'}</button></form> : <div className="showdown-volunteer-note"><Shield size={16} /><span>Volunteers need Admin access to enter scores.</span><button onClick={() => { setPanelOpen(true); setLoginError('') }}>Admin sign in</button></div>}
-        <div className="showdown-list">{showdownEntries.map((entry, index) => <article className="showdown-entry" key={entry.id}>
-          {editingShowdownId === entry.id ? <><label>Player name<input maxLength={80} value={editingShowdown.participant_name} onChange={event => setEditingShowdown({ ...editingShowdown, participant_name: event.target.value })} /></label><label>Score<input type="number" min="0" step="1" value={editingShowdown.score} onChange={event => setEditingShowdown({ ...editingShowdown, score: event.target.value })} /></label><button className="entry-save" disabled={busy} onClick={() => void saveShowdownEdit(entry.id)}>Save</button><button className="entry-cancel" onClick={() => setEditingShowdownId(null)}>Cancel</button></> : <><span className="showdown-rank">{index + 1}</span><span className="showdown-player">{entry.participant_name}</span><b className="showdown-score">{entry.score}</b>{superAdmin && <div className="showdown-actions"><button onClick={() => { setEditingShowdownId(entry.id); setEditingShowdown({ participant_name: entry.participant_name, score: String(entry.score) }) }}>Edit</button><button onClick={() => void deleteShowdownEntry(entry.id)} disabled={busy}>Remove</button></div>}</>}
-        </article>)}{!showdownError && showdownEntries.length === 0 && <div className="board-empty"><b>No scores entered yet.</b><span>Scores will appear here as volunteers add them.</span></div>}</div>
-      </section> : <section className="match-board" aria-label="League matches">{loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading scores from Supabase…</div> : filtered.length === 0 ? <div className="board-empty"><Shield size={22} /><b>{matches.length === 0 ? emptyMessage : 'No matches in this filter.'}</b></div> : filtered.map(match => <article className={`match-row ${match.status === 'live' ? 'row-live' : ''}`} key={match.id}>
+      <div className="filter-bar">{(['Points Table', 'All matches', 'Max Showdown', 'Live', 'Upcoming', 'Final', 'Group A', 'Group B', 'Group C', 'Group D'] as Filter[]).map(item => <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}{item === 'Live' && liveCount > 0 && <i>{liveCount}</i>}</button>)}<span className="match-total">{filter === 'Points Table' ? '4 GROUPS' : filter === 'Max Showdown' ? 'MAX SHOWDOWN' : `${filtered.length} MATCHES`}</span></div>
+      {filter === 'Points Table' ? loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading points table from Supabase…</div> : <PointsTable teams={teams} matches={matches} showFullNames={admin} /> : filter === 'Max Showdown' ? <MaxShowdown role={role} passcode={passcode} db={db} onAdminLogin={() => { setPanelOpen(true); setLoginError('') }} /> : <section className="match-board" aria-label="League matches">{loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading scores from Supabase…</div> : filtered.length === 0 ? <div className="board-empty"><Shield size={22} /><b>{matches.length === 0 ? emptyMessage : 'No matches in this filter.'}</b></div> : filtered.map(match => <article className={`match-row ${match.status === 'live' ? 'row-live' : ''}`} key={match.id}>
         <div className="match-meta"><span className={`status-label ${match.status}`}>{match.status === 'live' && <i />}{match.status === 'final' ? 'FINAL' : match.status === 'live' ? 'LIVE' : 'UPCOMING'}</span><span>DAY {match.event_day} · {formatTime(match.kickoff_time)}</span>{match.group_name && <span className="group-tag">GROUP {match.group_name}</span>}<span className="venue-label">{match.venue}</span></div>
         <div className="match-scoreline"><div className="match-team"><Crest name={match.home_team} teams={teams} /><b>{teamDisplayName(match.home_team, teams, admin)}</b></div><strong className="score-value">{match.status === 'upcoming' ? <span className="versus">VS</span> : <>{match.home_score}<em>:</em>{match.away_score}</>}</strong><div className="match-team away"><Crest name={match.away_team} teams={teams} /><b>{teamDisplayName(match.away_team, teams, admin)}</b></div></div>
         {admin && <div className="score-edit">
           <div className="score-side"><span>{teams.find(team => team.name === match.home_team)?.short_name}</span><button disabled={busy || (match.status === 'final' && !superAdmin) || match.home_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.home_team })} aria-label={`Subtract goal from ${match.home_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.home_team })} aria-label={`Add goal for ${match.home_team}`}><Plus size={17} /></button></div>
           <span className="edit-caption">EDIT SCORE</span>
           <div className="score-side"><button disabled={busy || (match.status === 'final' && !superAdmin) || match.away_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.away_team })} aria-label={`Subtract goal from ${match.away_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.away_team })} aria-label={`Add goal for ${match.away_team}`}><Plus size={17} /></button><span>{teams.find(team => team.name === match.away_team)?.short_name}</span></div>
-          <div className="status-actions">{match.status !== 'live' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Start</button>}{match.status !== 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'final' })} disabled={busy}><Flag size={13} /> Final</button>}{superAdmin && match.status === 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Reopen</button>}{superAdmin && <button onClick={() => beginMatchCorrection(match)} disabled={busy}>Edit all</button>}</div>
+          <div className="status-actions"><button onClick={() => beginCardCorrection(match)} disabled={busy}>Edit cards</button>{match.status !== 'live' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Start</button>}{match.status !== 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'final' })} disabled={busy}><Flag size={13} /> Final</button>}{superAdmin && match.status === 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Reopen</button>}{superAdmin && <button onClick={() => beginMatchCorrection(match)} disabled={busy}>Edit all</button>}</div>
         </div>}
+        {admin && editingCardsId === match.id && <form className="match-correction-form match-card-form" onSubmit={event => void saveMatchCards(event)}>
+          <h3>Cards &amp; fair play · Any match status</h3>
+          <label>Home yellow cards<input required type="number" min="0" step="1" value={cardCorrection.home_yellow_cards} onChange={event => setCardCorrection({ ...cardCorrection, home_yellow_cards: event.target.value })} /></label>
+          <label>Away yellow cards<input required type="number" min="0" step="1" value={cardCorrection.away_yellow_cards} onChange={event => setCardCorrection({ ...cardCorrection, away_yellow_cards: event.target.value })} /></label>
+          <label>Home red cards<input required type="number" min="0" step="1" value={cardCorrection.home_red_cards} onChange={event => setCardCorrection({ ...cardCorrection, home_red_cards: event.target.value })} /></label>
+          <label>Away red cards<input required type="number" min="0" step="1" value={cardCorrection.away_red_cards} onChange={event => setCardCorrection({ ...cardCorrection, away_red_cards: event.target.value })} /></label>
+          <label>Home fair-play points<input required type="number" step="1" value={cardCorrection.home_fair_play_score} onChange={event => setCardCorrection({ ...cardCorrection, home_fair_play_score: event.target.value })} /></label>
+          <label>Away fair-play points<input required type="number" step="1" value={cardCorrection.away_fair_play_score} onChange={event => setCardCorrection({ ...cardCorrection, away_fair_play_score: event.target.value })} /></label>
+          <div className="match-correction-actions"><button className="entry-save" disabled={busy}>{busy ? 'Saving…' : 'Save card update'}</button><button type="button" className="entry-cancel" onClick={() => setEditingCardsId(null)}>Cancel</button></div>
+        </form>}
         {superAdmin && editingMatchId === match.id && <form className="match-correction-form" onSubmit={event => void saveMatchCorrection(event)}>
           <h3>Super Admin · Edit match</h3>
           <label>Home team<select required value={matchCorrection.home_team} onChange={event => setMatchCorrection({ ...matchCorrection, home_team: event.target.value })}>{teams.map(team => <option key={team.id} value={team.name}>{team.name}</option>)}</select></label>
