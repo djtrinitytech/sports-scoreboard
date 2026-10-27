@@ -90,9 +90,9 @@ export default async function adminPanel(req, res) {
 
   if (body.mode === 'match_edit') {
     if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
-    const { match_id: matchId, expected_version: expectedVersion, home_team: homeTeam, away_team: awayTeam, home_score: homeScore, away_score: awayScore, status, event_day: eventDay, kickoff_time: kickoffTime, venue, stage } = body
-    if (typeof matchId !== 'string' || !Number.isSafeInteger(expectedVersion) || typeof homeTeam !== 'string' || typeof awayTeam !== 'string' || homeTeam === awayTeam || !Number.isSafeInteger(homeScore) || homeScore < 0 || !Number.isSafeInteger(awayScore) || awayScore < 0 || !['upcoming', 'live', 'final'].includes(status) || !Number.isInteger(eventDay) || eventDay < 1 || eventDay > 32767 || typeof kickoffTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(kickoffTime) || typeof venue !== 'string' || !venue.trim() || venue.trim().length > 120 || typeof stage !== 'string' || !stage.trim() || stage.trim().length > 40) {
-      return send(res, 400, { error: 'Check the match teams, score, status, day, time, venue, and stage.' })
+    const { match_id: matchId, expected_version: expectedVersion, home_team: homeTeam, away_team: awayTeam, home_score: homeScore, away_score: awayScore, home_yellow_cards: homeYellowCards, away_yellow_cards: awayYellowCards, home_red_cards: homeRedCards, away_red_cards: awayRedCards, home_fair_play_score: homeFairPlay, away_fair_play_score: awayFairPlay, status, event_day: eventDay, kickoff_time: kickoffTime, venue, stage } = body
+    if (typeof matchId !== 'string' || !Number.isSafeInteger(expectedVersion) || typeof homeTeam !== 'string' || typeof awayTeam !== 'string' || homeTeam === awayTeam || !Number.isSafeInteger(homeScore) || homeScore < 0 || !Number.isSafeInteger(awayScore) || awayScore < 0 || !Number.isSafeInteger(homeYellowCards) || homeYellowCards < 0 || !Number.isSafeInteger(awayYellowCards) || awayYellowCards < 0 || !Number.isSafeInteger(homeRedCards) || homeRedCards < 0 || !Number.isSafeInteger(awayRedCards) || awayRedCards < 0 || !Number.isSafeInteger(homeFairPlay) || !Number.isSafeInteger(awayFairPlay) || !['upcoming', 'live', 'final'].includes(status) || !Number.isInteger(eventDay) || eventDay < 1 || eventDay > 32767 || typeof kickoffTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(kickoffTime) || typeof venue !== 'string' || !venue.trim() || venue.trim().length > 120 || typeof stage !== 'string' || !stage.trim() || stage.trim().length > 40) {
+      return send(res, 400, { error: 'Check the match teams, score, cards, fair-play points, status, day, time, venue, and stage.' })
     }
     const { data, error } = await client.rpc('update_match_super_admin', {
       p_match_id: matchId,
@@ -101,6 +101,12 @@ export default async function adminPanel(req, res) {
       p_away_team: awayTeam,
       p_home_score: homeScore,
       p_away_score: awayScore,
+      p_home_yellow_cards: homeYellowCards,
+      p_away_yellow_cards: awayYellowCards,
+      p_home_red_cards: homeRedCards,
+      p_away_red_cards: awayRedCards,
+      p_home_fair_play_score: homeFairPlay,
+      p_away_fair_play_score: awayFairPlay,
       p_status: status,
       p_event_day: eventDay,
       p_kickoff_time: kickoffTime,

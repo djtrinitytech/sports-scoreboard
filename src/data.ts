@@ -4,6 +4,12 @@ export type Match = {
   away_team: string
   home_score: number
   away_score: number
+  home_yellow_cards: number
+  away_yellow_cards: number
+  home_red_cards: number
+  away_red_cards: number
+  home_fair_play_score: number
+  away_fair_play_score: number
   status: 'upcoming' | 'live' | 'final'
   starts_at: string
   event_day: number

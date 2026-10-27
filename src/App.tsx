@@ -2,14 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, Check, CircleHelp, Cloud, Flag, LogIn, LogOut, Minus, Plus, RefreshCw, Shield, ShieldCheck, Wifi, X } from 'lucide-react'
 import { createClient } from '@supabase/supabase-js'
 import { formatTime, type Match, type ShowdownEntry, type Team } from './data'
+import { PointsTable } from './PointsTable'
 import './showdown.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 const db = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null
 type Role = 'admin' | 'super_admin'
-type Filter = 'All matches' | 'Max Showdown' | 'Live' | 'Upcoming' | 'Final' | 'Group A' | 'Group B' | 'Group C' | 'Group D'
-type MatchCorrection = { home_team: string; away_team: string; home_score: string; away_score: string; status: Match['status']; event_day: string; kickoff_time: string; venue: string; stage: string }
+type Filter = 'Points Table' | 'All matches' | 'Max Showdown' | 'Live' | 'Upcoming' | 'Final' | 'Group A' | 'Group B' | 'Group C' | 'Group D'
+type MatchCorrection = { home_team: string; away_team: string; home_score: string; away_score: string; home_yellow_cards: string; away_yellow_cards: string; home_red_cards: string; away_red_cards: string; home_fair_play_score: string; away_fair_play_score: string; status: Match['status']; event_day: string; kickoff_time: string; venue: string; stage: string }
 const emptyMessage = 'No matches are in the database yet. Apply the official schedule migration to load the groups and fixtures.'
 
 function Crest({ name, teams }: { name: string; teams: Team[] }) {
@@ -26,7 +27,7 @@ export default function App() {
   const [teams, setTeams] = useState<Team[]>([])
   const [showdownEntries, setShowdownEntries] = useState<ShowdownEntry[]>([])
   const [showdownError, setShowdownError] = useState('')
-  const [filter, setFilter] = useState<Filter>('All matches')
+  const [filter, setFilter] = useState<Filter>('Points Table')
   const [panelOpen, setPanelOpen] = useState(false)
   const [passcode, setPasscode] = useState('')
   const [role, setRole] = useState<Role | null>(null)
@@ -45,7 +46,7 @@ export default function App() {
   const [editingShowdownId, setEditingShowdownId] = useState<string | null>(null)
   const [editingShowdown, setEditingShowdown] = useState({ participant_name: '', score: '' })
   const [editingMatchId, setEditingMatchId] = useState<string | null>(null)
-  const [matchCorrection, setMatchCorrection] = useState<MatchCorrection>({ home_team: '', away_team: '', home_score: '0', away_score: '0', status: 'upcoming', event_day: '1', kickoff_time: '', venue: '', stage: 'group' })
+  const [matchCorrection, setMatchCorrection] = useState<MatchCorrection>({ home_team: '', away_team: '', home_score: '0', away_score: '0', home_yellow_cards: '0', away_yellow_cards: '0', home_red_cards: '0', away_red_cards: '0', home_fair_play_score: '0', away_fair_play_score: '0', status: 'upcoming', event_day: '1', kickoff_time: '', venue: '', stage: 'group' })
   const scoreActionLock = useRef(false)
   const admin = role !== null
   const superAdmin = role === 'super_admin'
@@ -99,7 +100,7 @@ export default function App() {
   }
 
   const filtered = useMemo(() => matches.filter(match => {
-    if (filter === 'Max Showdown') return false
+    if (filter === 'Max Showdown' || filter === 'Points Table') return false
     if (filter === 'All matches') return true
     if (filter === 'Live') return match.status === 'live'
     if (filter === 'Upcoming') return match.status === 'upcoming'
@@ -137,7 +138,7 @@ export default function App() {
 
   function beginMatchCorrection(match: Match) {
     setEditingMatchId(match.id)
-    setMatchCorrection({ home_team: match.home_team, away_team: match.away_team, home_score: String(match.home_score), away_score: String(match.away_score), status: match.status, event_day: String(match.event_day ?? 1), kickoff_time: match.kickoff_time ?? '', venue: match.venue, stage: match.stage || 'group' })
+    setMatchCorrection({ home_team: match.home_team, away_team: match.away_team, home_score: String(match.home_score), away_score: String(match.away_score), home_yellow_cards: String(match.home_yellow_cards ?? 0), away_yellow_cards: String(match.away_yellow_cards ?? 0), home_red_cards: String(match.home_red_cards ?? 0), away_red_cards: String(match.away_red_cards ?? 0), home_fair_play_score: String(match.home_fair_play_score ?? 0), away_fair_play_score: String(match.away_fair_play_score ?? 0), status: match.status, event_day: String(match.event_day ?? 1), kickoff_time: match.kickoff_time ?? '', venue: match.venue, stage: match.stage || 'group' })
   }
 
   async function saveMatchCorrection(event: React.FormEvent) {
@@ -146,7 +147,7 @@ export default function App() {
     if (!superAdmin || !match || busy) return
     setBusy(true); setSyncPending(true)
     try {
-      await callAdmin({ mode: 'match_edit', match_id: match.id, expected_version: match.version, ...matchCorrection, home_score: Number(matchCorrection.home_score), away_score: Number(matchCorrection.away_score), event_day: Number(matchCorrection.event_day) })
+      await callAdmin({ mode: 'match_edit', match_id: match.id, expected_version: match.version, ...matchCorrection, home_score: Number(matchCorrection.home_score), away_score: Number(matchCorrection.away_score), home_yellow_cards: Number(matchCorrection.home_yellow_cards), away_yellow_cards: Number(matchCorrection.away_yellow_cards), home_red_cards: Number(matchCorrection.home_red_cards), away_red_cards: Number(matchCorrection.away_red_cards), home_fair_play_score: Number(matchCorrection.home_fair_play_score), away_fair_play_score: Number(matchCorrection.away_fair_play_score), event_day: Number(matchCorrection.event_day) })
       setEditingMatchId(null); await refresh(true); announce('Match details corrected · Synced')
     } catch (err) {
       const message = err instanceof Error ? err.message : 'server error'
@@ -209,8 +210,8 @@ export default function App() {
       <div className="board-title-row"><div><div className="kicker">COMMUNITY LEAGUE</div><h1>Live <span>scoreboard</span></h1><p>Live scores, upcoming fixtures and final results from the league.</p></div><button className="refresh-button" onClick={() => void refresh()} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /> Refresh</button></div>
       <div className="board-status-row"><div className="live-indicator"><i /> {liveCount} LIVE {liveCount === 1 ? 'MATCH' : 'MATCHES'}</div><span>{synced ? <><Wifi size={14} /> Last checked {new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</> : <><Cloud size={14} /> Waiting for server confirmation</>}</span></div>
       {error && <div className="error-banner"><CircleHelp size={18} /><div><b>Could not load league data</b><span>{error}</span>{error.includes('relation') && <span>Apply the SQL migrations in Supabase, then refresh.</span>}</div><button onClick={() => void refresh()}>Retry</button></div>}
-      <div className="filter-bar">{(['All matches', 'Max Showdown', 'Live', 'Upcoming', 'Final', 'Group A', 'Group B', 'Group C', 'Group D'] as Filter[]).map(item => <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}{item === 'Live' && liveCount > 0 && <i>{liveCount}</i>}</button>)}<span className="match-total">{filter === 'Max Showdown' ? `${showdownEntries.length} ENTRIES` : `${filtered.length} MATCHES`}</span></div>
-      {filter === 'Max Showdown' ? <section className="showdown-board" aria-label="Max Showdown results">
+      <div className="filter-bar">{(['Points Table', 'All matches', 'Max Showdown', 'Live', 'Upcoming', 'Final', 'Group A', 'Group B', 'Group C', 'Group D'] as Filter[]).map(item => <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}{item === 'Live' && liveCount > 0 && <i>{liveCount}</i>}</button>)}<span className="match-total">{filter === 'Points Table' ? '4 GROUPS' : filter === 'Max Showdown' ? `${showdownEntries.length} ENTRIES` : `${filtered.length} MATCHES`}</span></div>
+      {filter === 'Points Table' ? loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading points table from Supabase…</div> : <PointsTable teams={teams} matches={matches} /> : filter === 'Max Showdown' ? <section className="showdown-board" aria-label="Max Showdown results">
         <div className="showdown-heading"><div><span className="kicker">PANNA COMPETITION</span><h2>Max Showdown</h2><p>Player scores and leaderboard</p></div><span className="showdown-count">{showdownEntries.length} {showdownEntries.length === 1 ? 'PLAYER' : 'PLAYERS'}</span></div>
         {showdownError && <div className="error-banner"><CircleHelp size={18} /><div><b>Max Showdown is not set up yet</b><span>Apply migration 004 in the Supabase SQL Editor, then refresh.</span></div><button onClick={() => void refresh()}>Retry</button></div>}
         {admin ? <form className="showdown-entry-form" onSubmit={event => void addShowdownEntry(event)}><label>Player name<input required maxLength={80} value={showdownName} onChange={event => setShowdownName(event.target.value)} placeholder="Enter player name" /></label><label>Score<input required type="number" min="0" step="1" value={showdownScore} onChange={event => setShowdownScore(event.target.value)} placeholder="0" /></label><button className="panel-action" disabled={busy || !showdownName.trim() || showdownScore === ''}>{busy ? 'Saving…' : 'Add score'}</button></form> : <div className="showdown-volunteer-note"><Shield size={16} /><span>Volunteers need Admin access to enter scores.</span><button onClick={() => { setPanelOpen(true); setLoginError('') }}>Admin sign in</button></div>}
@@ -232,6 +233,12 @@ export default function App() {
           <label>Away team<select required value={matchCorrection.away_team} onChange={event => setMatchCorrection({ ...matchCorrection, away_team: event.target.value })}>{teams.map(team => <option key={team.id} value={team.name}>{team.name}</option>)}</select></label>
           <label>Home score<input required type="number" min="0" step="1" value={matchCorrection.home_score} onChange={event => setMatchCorrection({ ...matchCorrection, home_score: event.target.value })} /></label>
           <label>Away score<input required type="number" min="0" step="1" value={matchCorrection.away_score} onChange={event => setMatchCorrection({ ...matchCorrection, away_score: event.target.value })} /></label>
+          <label>Home yellow cards<input required type="number" min="0" step="1" value={matchCorrection.home_yellow_cards} onChange={event => setMatchCorrection({ ...matchCorrection, home_yellow_cards: event.target.value })} /></label>
+          <label>Away yellow cards<input required type="number" min="0" step="1" value={matchCorrection.away_yellow_cards} onChange={event => setMatchCorrection({ ...matchCorrection, away_yellow_cards: event.target.value })} /></label>
+          <label>Home red cards<input required type="number" min="0" step="1" value={matchCorrection.home_red_cards} onChange={event => setMatchCorrection({ ...matchCorrection, home_red_cards: event.target.value })} /></label>
+          <label>Away red cards<input required type="number" min="0" step="1" value={matchCorrection.away_red_cards} onChange={event => setMatchCorrection({ ...matchCorrection, away_red_cards: event.target.value })} /></label>
+          <label>Home fair-play points<input required type="number" step="1" value={matchCorrection.home_fair_play_score} onChange={event => setMatchCorrection({ ...matchCorrection, home_fair_play_score: event.target.value })} /></label>
+          <label>Away fair-play points<input required type="number" step="1" value={matchCorrection.away_fair_play_score} onChange={event => setMatchCorrection({ ...matchCorrection, away_fair_play_score: event.target.value })} /></label>
           <label>Status<select value={matchCorrection.status} onChange={event => setMatchCorrection({ ...matchCorrection, status: event.target.value as Match['status'] })}><option value="upcoming">Upcoming</option><option value="live">Live</option><option value="final">Final</option></select></label>
           <label>Day<input required type="number" min="1" max="32767" step="1" value={matchCorrection.event_day} onChange={event => setMatchCorrection({ ...matchCorrection, event_day: event.target.value })} /></label>
           <label>Kickoff<input required type="time" value={matchCorrection.kickoff_time} onChange={event => setMatchCorrection({ ...matchCorrection, kickoff_time: event.target.value })} /></label>
