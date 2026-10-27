@@ -1,4 +1,5 @@
 .showdown-board{margin-top:24px;background:#fff;border:1px solid #e6ebe4;border-radius:8px;padding:24px;box-shadow:0 3px 13px #1a2b1d06}
+.trinity-logo{width:94px;height:40px;object-fit:contain;padding:4px 7px;border-radius:4px;background:#17271e}
 .showdown-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:18px;border-bottom:1px solid #e6ebe4}
 .showdown-heading h2{margin:7px 0 4px;font:700 26px Manrope,sans-serif;letter-spacing:-.6px;color:#1b2b22}
 .showdown-heading p{margin:0;color:#7e8880;font-size:13px}
@@ -20,5 +21,11 @@
 .showdown-entry:has(label){display:grid;grid-template-columns:minmax(0,1fr) minmax(90px,.3fr) auto auto}
 .showdown-entry label{min-width:0}
 .entry-save{background:#244e36;color:#fff;border-color:#244e36}
+.match-correction-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px;padding:17px;background:#f7f9f6;border:1px solid #e2e9e0;border-radius:6px}
+.match-correction-form h3{grid-column:1/-1;margin:0;color:#31583e;font-size:13px}
+.match-correction-form label{display:flex;min-width:0;flex-direction:column;gap:6px;color:#526056;font-size:10px;font-weight:600}
+.match-correction-form input,.match-correction-form select{width:100%;height:44px;min-width:0;padding:0 9px;border:1px solid #d8e0d6;border-radius:4px;background:#fff;color:#24372a;font-size:12px}
+.match-correction-actions{grid-column:1/-1;display:flex;gap:8px}
+.match-correction-actions button{min-height:44px}
 .board-empty span{color:#7e8880;font-size:12px}
-@media(max-width:650px){.showdown-board{margin-top:18px;padding:16px 13px}.showdown-heading h2{font-size:22px}.showdown-entry-form{grid-template-columns:minmax(0,1fr) 96px;gap:10px}.showdown-entry-form .panel-action{grid-column:1/-1;width:100%;min-height:46px}.showdown-entry{gap:9px}.showdown-entry:has(label){grid-template-columns:minmax(0,1fr) 82px}.showdown-entry:has(label) button{min-height:44px}.showdown-entry:has(label) button:nth-last-child(2){grid-column:1}.showdown-entry:has(label) button:last-child{grid-column:2}.showdown-actions{gap:4px}.showdown-actions button{padding:0 8px;font-size:10px}.showdown-volunteer-note{align-items:flex-start;flex-wrap:wrap}.showdown-volunteer-note span{min-width:60%;padding-top:3px}}
+@media(max-width:650px){.trinity-logo{width:62px;height:34px;padding:3px}.showdown-board{margin-top:18px;padding:16px 13px}.showdown-heading h2{font-size:22px}.showdown-entry-form{grid-template-columns:minmax(0,1fr) 96px;gap:10px}.showdown-entry-form .panel-action{grid-column:1/-1;width:100%;min-height:46px}.showdown-entry{gap:9px}.showdown-entry:has(label){grid-template-columns:minmax(0,1fr) 82px}.showdown-entry:has(label) button{min-height:44px}.showdown-entry:has(label) button:nth-last-child(2){grid-column:1}.showdown-entry:has(label) button:last-child{grid-column:2}.showdown-actions{gap:4px}.showdown-actions button{padding:0 8px;font-size:10px}.showdown-volunteer-note{align-items:flex-start;flex-wrap:wrap}.showdown-volunteer-note span{min-width:60%;padding-top:3px}.match-correction-form{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:12px}.match-correction-actions{flex-wrap:wrap}.match-correction-actions button{flex:1}}

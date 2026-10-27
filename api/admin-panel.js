@@ -88,6 +88,29 @@ export default async function adminPanel(req, res) {
     return send(res, 200, { role, data })
   }
 
+  if (body.mode === 'match_edit') {
+    if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
+    const { match_id: matchId, expected_version: expectedVersion, home_team: homeTeam, away_team: awayTeam, home_score: homeScore, away_score: awayScore, status, event_day: eventDay, kickoff_time: kickoffTime, venue, stage } = body
+    if (typeof matchId !== 'string' || !Number.isSafeInteger(expectedVersion) || typeof homeTeam !== 'string' || typeof awayTeam !== 'string' || homeTeam === awayTeam || !Number.isSafeInteger(homeScore) || homeScore < 0 || !Number.isSafeInteger(awayScore) || awayScore < 0 || !['upcoming', 'live', 'final'].includes(status) || !Number.isInteger(eventDay) || eventDay < 1 || eventDay > 32767 || typeof kickoffTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(kickoffTime) || typeof venue !== 'string' || !venue.trim() || venue.trim().length > 120 || typeof stage !== 'string' || !stage.trim() || stage.trim().length > 40) {
+      return send(res, 400, { error: 'Check the match teams, score, status, day, time, venue, and stage.' })
+    }
+    const { data, error } = await client.rpc('update_match_super_admin', {
+      p_match_id: matchId,
+      p_expected_version: expectedVersion,
+      p_home_team: homeTeam,
+      p_away_team: awayTeam,
+      p_home_score: homeScore,
+      p_away_score: awayScore,
+      p_status: status,
+      p_event_day: eventDay,
+      p_kickoff_time: kickoffTime,
+      p_venue: venue.trim(),
+      p_stage: stage.trim(),
+    })
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
   if (body.mode === 'create_match') {
     if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
     const fixture = body.fixture

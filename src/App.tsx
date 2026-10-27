@@ -9,6 +9,7 @@ const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 const db = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null
 type Role = 'admin' | 'super_admin'
 type Filter = 'All matches' | 'Max Showdown' | 'Live' | 'Upcoming' | 'Final' | 'Group A' | 'Group B' | 'Group C' | 'Group D'
+type MatchCorrection = { home_team: string; away_team: string; home_score: string; away_score: string; status: Match['status']; event_day: string; kickoff_time: string; venue: string; stage: string }
 const emptyMessage = 'No matches are in the database yet. Apply the official schedule migration to load the groups and fixtures.'
 
 function Crest({ name, teams }: { name: string; teams: Team[] }) {
@@ -43,6 +44,8 @@ export default function App() {
   const [showdownScore, setShowdownScore] = useState('')
   const [editingShowdownId, setEditingShowdownId] = useState<string | null>(null)
   const [editingShowdown, setEditingShowdown] = useState({ participant_name: '', score: '' })
+  const [editingMatchId, setEditingMatchId] = useState<string | null>(null)
+  const [matchCorrection, setMatchCorrection] = useState<MatchCorrection>({ home_team: '', away_team: '', home_score: '0', away_score: '0', status: 'upcoming', event_day: '1', kickoff_time: '', venue: '', stage: 'group' })
   const scoreActionLock = useRef(false)
   const admin = role !== null
   const superAdmin = role === 'super_admin'
@@ -132,6 +135,26 @@ export default function App() {
     } finally { scoreActionLock.current = false; setSyncPending(false); setBusy(false) }
   }
 
+  function beginMatchCorrection(match: Match) {
+    setEditingMatchId(match.id)
+    setMatchCorrection({ home_team: match.home_team, away_team: match.away_team, home_score: String(match.home_score), away_score: String(match.away_score), status: match.status, event_day: String(match.event_day ?? 1), kickoff_time: match.kickoff_time ?? '', venue: match.venue, stage: match.stage || 'group' })
+  }
+
+  async function saveMatchCorrection(event: React.FormEvent) {
+    event.preventDefault()
+    const match = matches.find(item => item.id === editingMatchId)
+    if (!superAdmin || !match || busy) return
+    setBusy(true); setSyncPending(true)
+    try {
+      await callAdmin({ mode: 'match_edit', match_id: match.id, expected_version: match.version, ...matchCorrection, home_score: Number(matchCorrection.home_score), away_score: Number(matchCorrection.away_score), event_day: Number(matchCorrection.event_day) })
+      setEditingMatchId(null); await refresh(true); announce('Match details corrected · Synced')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'server error'
+      announce(message.toLowerCase().includes('version conflict') ? 'Match changed elsewhere. Refresh and retry the correction.' : `Could not correct match: ${message}`)
+      await refresh(true)
+    } finally { setSyncPending(false); setBusy(false) }
+  }
+
   async function createFixture(event: React.FormEvent) {
     event.preventDefault()
     if (!superAdmin || busy) return
@@ -178,7 +201,7 @@ export default function App() {
 
   return <div className="board-shell">
     <header className="board-header">
-      <div className="board-brand"><span className="board-mark"><Activity size={20} /></span><span>TOUCHLINE <small>LIVE SCORES</small></span></div>
+      <div className="board-brand"><span className="board-mark"><Activity size={20} /></span><span>VYUHA <small>LIVE SCORES</small></span><img className="trinity-logo" src="/trinity-logo.webp" alt="Trinity" /></div>
       <div className={`connection-pill ${syncFailed || !online ? 'warning' : ''}`}><span className="connection-dot" />{stateLabel}</div>
       <button className="admin-open" onClick={() => { setPanelOpen(true); setLoginError('') }}>{admin ? <><ShieldCheck size={17} /> Admin panel</> : <><LogIn size={17} /> Admin</>}</button>
     </header>
@@ -197,17 +220,35 @@ export default function App() {
       </section> : <section className="match-board" aria-label="League matches">{loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading scores from Supabase…</div> : filtered.length === 0 ? <div className="board-empty"><Shield size={22} /><b>{matches.length === 0 ? emptyMessage : 'No matches in this filter.'}</b></div> : filtered.map(match => <article className={`match-row ${match.status === 'live' ? 'row-live' : ''}`} key={match.id}>
         <div className="match-meta"><span className={`status-label ${match.status}`}>{match.status === 'live' && <i />}{match.status === 'final' ? 'FINAL' : match.status === 'live' ? 'LIVE' : 'UPCOMING'}</span><span>DAY {match.event_day} · {formatTime(match.kickoff_time)}</span>{match.group_name && <span className="group-tag">GROUP {match.group_name}</span>}<span className="venue-label">{match.venue}</span></div>
         <div className="match-scoreline"><div className="match-team"><Crest name={match.home_team} teams={teams} /><b>{match.home_team}</b></div><strong className="score-value">{match.status === 'upcoming' ? <span className="versus">VS</span> : <>{match.home_score}<em>:</em>{match.away_score}</>}</strong><div className="match-team away"><Crest name={match.away_team} teams={teams} /><b>{match.away_team}</b></div></div>
-        {admin && <div className="score-edit"><div className="score-side"><span>{teams.find(team => team.name === match.home_team)?.short_name}</span><button disabled={busy || (match.status === 'final' && !superAdmin) || match.home_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.home_team })} aria-label={`Subtract goal from ${match.home_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.home_team })} aria-label={`Add goal for ${match.home_team}`}><Plus size={17} /></button></div><span className="edit-caption">EDIT SCORE</span><div className="score-side"><button disabled={busy || (match.status === 'final' && !superAdmin) || match.away_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.away_team })} aria-label={`Subtract goal from ${match.away_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.away_team })} aria-label={`Add goal for ${match.away_team}`}><Plus size={17} /></button><span>{teams.find(team => team.name === match.away_team)?.short_name}</span></div><div className="status-actions">{match.status !== 'live' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Start</button>}{match.status !== 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'final' })} disabled={busy}><Flag size={13} /> Final</button>}{superAdmin && match.status === 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Reopen</button>}</div></div>}
+        {admin && <div className="score-edit">
+          <div className="score-side"><span>{teams.find(team => team.name === match.home_team)?.short_name}</span><button disabled={busy || (match.status === 'final' && !superAdmin) || match.home_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.home_team })} aria-label={`Subtract goal from ${match.home_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.home_team })} aria-label={`Add goal for ${match.home_team}`}><Plus size={17} /></button></div>
+          <span className="edit-caption">EDIT SCORE</span>
+          <div className="score-side"><button disabled={busy || (match.status === 'final' && !superAdmin) || match.away_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.away_team })} aria-label={`Subtract goal from ${match.away_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.away_team })} aria-label={`Add goal for ${match.away_team}`}><Plus size={17} /></button><span>{teams.find(team => team.name === match.away_team)?.short_name}</span></div>
+          <div className="status-actions">{match.status !== 'live' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Start</button>}{match.status !== 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'final' })} disabled={busy}><Flag size={13} /> Final</button>}{superAdmin && match.status === 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Reopen</button>}{superAdmin && <button onClick={() => beginMatchCorrection(match)} disabled={busy}>Edit all</button>}</div>
+        </div>}
+        {superAdmin && editingMatchId === match.id && <form className="match-correction-form" onSubmit={event => void saveMatchCorrection(event)}>
+          <h3>Super Admin · Edit match</h3>
+          <label>Home team<select required value={matchCorrection.home_team} onChange={event => setMatchCorrection({ ...matchCorrection, home_team: event.target.value })}>{teams.map(team => <option key={team.id} value={team.name}>{team.name}</option>)}</select></label>
+          <label>Away team<select required value={matchCorrection.away_team} onChange={event => setMatchCorrection({ ...matchCorrection, away_team: event.target.value })}>{teams.map(team => <option key={team.id} value={team.name}>{team.name}</option>)}</select></label>
+          <label>Home score<input required type="number" min="0" step="1" value={matchCorrection.home_score} onChange={event => setMatchCorrection({ ...matchCorrection, home_score: event.target.value })} /></label>
+          <label>Away score<input required type="number" min="0" step="1" value={matchCorrection.away_score} onChange={event => setMatchCorrection({ ...matchCorrection, away_score: event.target.value })} /></label>
+          <label>Status<select value={matchCorrection.status} onChange={event => setMatchCorrection({ ...matchCorrection, status: event.target.value as Match['status'] })}><option value="upcoming">Upcoming</option><option value="live">Live</option><option value="final">Final</option></select></label>
+          <label>Day<input required type="number" min="1" max="32767" step="1" value={matchCorrection.event_day} onChange={event => setMatchCorrection({ ...matchCorrection, event_day: event.target.value })} /></label>
+          <label>Kickoff<input required type="time" value={matchCorrection.kickoff_time} onChange={event => setMatchCorrection({ ...matchCorrection, kickoff_time: event.target.value })} /></label>
+          <label>Venue<input required maxLength={120} value={matchCorrection.venue} onChange={event => setMatchCorrection({ ...matchCorrection, venue: event.target.value })} /></label>
+          <label>Stage<input required maxLength={40} value={matchCorrection.stage} onChange={event => setMatchCorrection({ ...matchCorrection, stage: event.target.value })} /></label>
+          <div className="match-correction-actions"><button className="entry-save" disabled={busy}>{busy ? 'Saving…' : 'Save all changes'}</button><button type="button" className="entry-cancel" onClick={() => setEditingMatchId(null)}>Cancel</button></div>
+        </form>}
       </article>)}</section>}
       {!admin && filter !== 'Max Showdown' && <div className="readonly-note"><Shield size={15} /> Public scoreboard · read only</div>}
-      <footer className="board-footer">TOUCHLINE · LIVE LEAGUE DATA <span>{synced ? <><Check size={13} /> SYNCED WITH SUPABASE</> : stateLabel.toUpperCase()}</span></footer>
+      <footer className="board-footer">VYUHA · LIVE LEAGUE DATA <span>{synced ? <><Check size={13} /> SYNCED WITH SUPABASE</> : stateLabel.toUpperCase()}</span></footer>
     </main>
     {panelOpen && <div className="panel-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPanelOpen(false) }}><aside className="admin-panel" role="dialog" aria-modal="true" aria-label="Admin panel">
       <div className="panel-header"><div><span className="panel-symbol"><ShieldCheck size={19} /></span><span><b>Admin panel</b><small>Score and access controls</small></span></div><IconButton label="Close panel" onClick={() => setPanelOpen(false)}><X size={20} /></IconButton></div>
       {admin ? <><div className="account-strip"><div className="account-icon">{superAdmin ? <ShieldCheck size={20} /> : <Shield size={20} />}</div><span><b>{superAdmin ? 'Super admin access' : 'Admin access'}</b><small>Shared passcode verified</small></span><button onClick={signOut} aria-label="Sign out"><LogOut size={17} /></button></div>
         <div className="panel-section"><h2>Scoreboard controls</h2><p>Use +1 or undo beside any match. Changes save directly to Supabase.</p><button className="panel-action" onClick={() => { setPanelOpen(false); window.scrollTo({ top: 400, behavior: 'smooth' }) }}>Go to matches</button></div>
         {superAdmin && <div className="panel-section"><h2>Add a group fixture</h2><form className="fixture-form" onSubmit={event => void createFixture(event)}><label>Home team<select required value={fixture.home_team} onChange={event => setFixture({ ...fixture, home_team: event.target.value })}><option value="">Choose team</option>{teams.map(team => <option key={team.id} value={team.name}>{team.name}</option>)}</select></label><label>Away team<select required value={fixture.away_team} onChange={event => setFixture({ ...fixture, away_team: event.target.value })}><option value="">Choose team</option>{teams.filter(team => team.name !== fixture.home_team).map(team => <option key={team.id} value={team.name}>{team.name}</option>)}</select></label><label>Day<select value={fixture.event_day} onChange={event => setFixture({ ...fixture, event_day: Number(event.target.value) })}><option value={1}>Day 1</option><option value={2}>Day 2</option></select></label><label>Kickoff time<input type="time" required value={fixture.kickoff_time} onChange={event => setFixture({ ...fixture, kickoff_time: event.target.value })} /></label><label>Turf<input required value={fixture.venue} onChange={event => setFixture({ ...fixture, venue: event.target.value })} placeholder="Turf 1" /></label><button className="panel-action" disabled={busy || teams.length < 2}>Add fixture</button></form></div>}
-        <div className="panel-help">{superAdmin ? 'Super admin can correct finalized scores, add fixtures, and manage all match states.' : 'Admins can update scores and match status. Finalized scores require super admin access.'}</div>
+        <div className="panel-help">{superAdmin ? 'Super admin can directly edit match scores and details, correct Max Showdown entries, add fixtures, and manage match states.' : 'Admins can update scores and match status. Direct corrections and finalized scores require super admin access.'}</div>
       </> : <><div className="panel-intro"><div className="panel-symbol"><ShieldCheck size={21} /></div><h2>Admin access</h2><p>Enter the admin or super admin passcode.</p></div><form className="login-form" onSubmit={event => void signIn(event)}><label>Passcode<input type="password" autoComplete="current-password" required value={passcode} onChange={event => setPasscode(event.target.value)} /></label>{loginError && <p className="form-error" role="alert">{loginError}</p>}<button className="panel-action" disabled={busy}>{busy ? 'Checking…' : 'Continue'}</button></form></>}
     </aside></div>}
     {toast && <div className="toast"><Check size={16} />{toast}</div>}
