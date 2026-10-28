@@ -14,6 +14,7 @@ const db = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) :
 type Role = 'admin' | 'super_admin'
 type Filter = 'Points Table' | 'All matches' | 'Knockout' | 'Max Showdown' | 'Live' | 'Upcoming' | 'Final' | 'Group A' | 'Group B' | 'Group C' | 'Group D'
 type BoardMatch = Match & { bracket_code?: string; resolution_error?: string | null }
+type PenaltyCorrection = { home_penalty_score: string; away_penalty_score: string }
 type MatchCorrection = { home_team: string; away_team: string; home_score: string; away_score: string; home_yellow_cards: string; away_yellow_cards: string; home_red_cards: string; away_red_cards: string; home_fair_play_score: string; away_fair_play_score: string; status: Match['status']; event_day: string; kickoff_time: string; venue: string; stage: string }
 type MatchCards = Pick<MatchCorrection, 'home_yellow_cards' | 'away_yellow_cards' | 'home_red_cards' | 'away_red_cards' | 'home_fair_play_score' | 'away_fair_play_score'>
 const emptyMessage = 'No matches are in the database yet. Apply the official schedule migration to load the groups and fixtures.'
@@ -26,6 +27,9 @@ function Crest({ name, teams }: { name: string; teams: Team[] }) {
 function IconButton({ children, onClick, label }: { children: React.ReactNode; onClick: () => void; label: string }) {
   return <button className="icon-button" onClick={onClick} aria-label={label}>{children}</button>
 }
+
+function isKnockoutMatch(match: Match) { return ['quarterfinal', 'semifinal', 'final', 'third_place'].includes(match.stage) }
+function penaltyNeeded(match: Match) { return isKnockoutMatch(match) && match.status === 'final' && match.home_score === match.away_score && (match.home_penalty_score ?? 0) === (match.away_penalty_score ?? 0) }
 
 export default function App() {
   const [matches, setMatches] = useState<Match[]>([])
@@ -48,6 +52,8 @@ export default function App() {
   const [fixture, setFixture] = useState({ home_team: '', away_team: '', event_day: 1, kickoff_time: '', venue: '' })
   const [editingMatchId, setEditingMatchId] = useState<string | null>(null)
   const [editingCardsId, setEditingCardsId] = useState<string | null>(null)
+  const [editingPenaltiesId, setEditingPenaltiesId] = useState<string | null>(null)
+  const [penaltyCorrection, setPenaltyCorrection] = useState<PenaltyCorrection>({ home_penalty_score: '0', away_penalty_score: '0' })
   const [cardCorrection, setCardCorrection] = useState<MatchCards>({ home_yellow_cards: '0', away_yellow_cards: '0', home_red_cards: '0', away_red_cards: '0', home_fair_play_score: '0', away_fair_play_score: '0' })
   const [matchCorrection, setMatchCorrection] = useState<MatchCorrection>({ home_team: '', away_team: '', home_score: '0', away_score: '0', home_yellow_cards: '0', away_yellow_cards: '0', home_red_cards: '0', away_red_cards: '0', home_fair_play_score: '0', away_fair_play_score: '0', status: 'upcoming', event_day: '1', kickoff_time: '', venue: '', stage: 'group' })
   const scoreActionLock = useRef(false)
@@ -116,7 +122,7 @@ export default function App() {
     const placeholders: BoardMatch[] = knockoutFixtures.filter(slot => !slot.match_id).map(slot => ({
       id: `bracket-${slot.code}`, bracket_code: slot.code, resolution_error: slot.resolution_error ?? null,
       home_team: slot.home_team ?? slot.home_label, away_team: slot.away_team ?? slot.away_label,
-      home_score: 0, away_score: 0, home_yellow_cards: 0, away_yellow_cards: 0, home_red_cards: 0, away_red_cards: 0,
+      home_score: 0, away_score: 0, home_penalty_score: 0, away_penalty_score: 0, home_yellow_cards: 0, away_yellow_cards: 0, home_red_cards: 0, away_red_cards: 0,
       home_fair_play_score: 0, away_fair_play_score: 0, status: 'upcoming', starts_at: '', event_day: slot.event_day,
       kickoff_time: slot.kickoff_time, group_name: null, stage: slot.stage, venue: slot.venue, version: 0, updated_at: '',
     }))
@@ -201,6 +207,29 @@ export default function App() {
     } finally { setSyncPending(false); setBusy(false) }
   }
 
+  function beginPenaltyCorrection(match: Match) {
+    setEditingPenaltiesId(match.id)
+    setPenaltyCorrection({ home_penalty_score: String(match.home_penalty_score ?? 0), away_penalty_score: String(match.away_penalty_score ?? 0) })
+  }
+
+  async function savePenaltyCorrection(event: React.FormEvent) {
+    event.preventDefault()
+    const match = matches.find(item => item.id === editingPenaltiesId)
+    if (!admin || !match || busy) return
+    const previous = match
+    const penaltyValues = Object.fromEntries(Object.entries(penaltyCorrection).map(([key, value]) => [key, Number(value)]))
+    const optimistic = { ...match, ...penaltyValues, version: match.version + 1 } as Match
+    setMatches(current => current.map(item => item.id === match.id ? optimistic : item)); setBusy(true); setSyncPending(true)
+    try {
+      const result = await callAdmin({ mode: 'match_penalties', match_id: match.id, expected_version: match.version, ...penaltyValues })
+      const saved = result.data as Match
+      setMatches(current => current.map(item => item.id === match.id ? saved : item)); setEditingPenaltiesId(null)
+      await refresh(true); announce(saved.home_penalty_score === saved.away_penalty_score ? 'Penalty shoot-out still tied · enter the next kicks' : 'Penalty winner saved · bracket advanced')
+    } catch (err) {
+      setMatches(current => current.map(item => item.id === match.id ? previous : item)); announce(`Could not save penalties: ${err instanceof Error ? err.message : 'server error'}`); await refresh(true)
+    } finally { setSyncPending(false); setBusy(false) }
+  }
+
   async function createFixture(event: React.FormEvent) {
     event.preventDefault()
     if (!superAdmin || busy) return
@@ -225,15 +254,17 @@ export default function App() {
       {error && <div className="error-banner"><CircleHelp size={18} /><div><b>Could not load league data</b><span>{error}</span>{error.includes('relation') && <span>Apply the SQL migrations in Supabase, then refresh.</span>}</div><button onClick={() => void refresh()}>Retry</button></div>}
       <div className="filter-bar">{(['Points Table', 'All matches', 'Knockout', 'Live', 'Upcoming', 'Final', 'Group A', 'Group B', 'Group C', 'Group D'] as Filter[]).map(item => <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}{item === 'Live' && liveCount > 0 && <i>{liveCount}</i>}</button>)}<span className="match-total">{filter === 'Points Table' ? '4 GROUPS' : filter === 'Max Showdown' ? 'MAX SHOWDOWN' : filter === 'Knockout' ? `${displayMatches.length} BRACKET SLOTS` : `${filtered.length} MATCHES`}</span></div>
       {filter === 'Points Table' ? loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading points table from Supabase…</div> : <PointsTable teams={teams} matches={matches} showFullNames={admin} /> : filter === 'Max Showdown' ? <MaxShowdown role={role} passcode={passcode} db={db} onAdminLogin={() => { setPanelOpen(true); setLoginError('') }} /> : <section className="match-board" aria-label={filter === 'Knockout' ? 'Knockout bracket fixtures' : 'League matches'}>{loading ? <div className="board-empty"><RefreshCw className="spin" size={20} />Loading scores from Supabase…</div> : displayMatches.length === 0 ? <div className="board-empty"><Shield size={22} /><b>{filter === 'Knockout' && knockoutError ? 'Knockout fixtures need the latest database migration.' : matches.length === 0 ? emptyMessage : 'No matches in this filter.'}</b></div> : displayMatches.map(match => <article className={`match-row ${match.status === 'live' ? 'row-live' : ''} ${match.bracket_code ? 'bracket-placeholder' : ''}`} key={match.id}>
-        <div className="match-meta"><span className={`status-label ${match.status}`}>{match.bracket_code ? `${match.bracket_code} · TBD` : <>{match.status === 'live' && <i />}{match.status === 'final' ? 'FINAL' : match.status === 'live' ? 'LIVE' : 'UPCOMING'}</>}</span><span>DAY {match.event_day} · {formatTime(match.kickoff_time)}</span>{match.group_name && <span className="group-tag">GROUP {match.group_name}</span>}{!match.group_name && match.stage !== 'group' && <span className="group-tag">{match.stage.replace('_',' ')}</span>}<span className="venue-label">{match.venue}</span></div>
-        <div className="match-scoreline"><div className="match-team"><Crest name={match.home_team} teams={teams} /><b>{teamDisplayName(match.home_team, teams, admin)}</b></div><strong className="score-value">{match.status === 'upcoming' ? <span className="versus">VS</span> : <>{match.home_score}<em>:</em>{match.away_score}</>}</strong><div className="match-team away"><Crest name={match.away_team} teams={teams} /><b>{teamDisplayName(match.away_team, teams, admin)}</b></div></div>
+        <div className="match-meta"><span className={`status-label ${penaltyNeeded(match) ? 'penalties' : match.status}`}>{match.bracket_code ? `${match.bracket_code} · TBD` : <>{match.status === 'live' && <i />}{penaltyNeeded(match) ? 'PENALTIES' : match.status === 'final' ? 'FINAL' : match.status === 'live' ? 'LIVE' : 'UPCOMING'}</>}</span><span>DAY {match.event_day} · {formatTime(match.kickoff_time)}</span>{match.group_name && <span className="group-tag">GROUP {match.group_name}</span>}{!match.group_name && match.stage !== 'group' && <span className="group-tag">{match.stage.replace('_',' ')}</span>}<span className="venue-label">{match.venue}</span></div>
+        <div className="match-scoreline"><div className="match-team"><Crest name={match.home_team} teams={teams} /><b>{teamDisplayName(match.home_team, teams, admin)}</b></div><strong className="score-value">{match.status === 'upcoming' ? <span className="versus">VS</span> : <>{match.home_score}<em>:</em>{match.away_score}{isKnockoutMatch(match) && match.status === 'final' && match.home_score === match.away_score && !penaltyNeeded(match) && <small className="penalty-score">PEN {match.home_penalty_score}–{match.away_penalty_score}</small>}</>}</strong><div className="match-team away"><Crest name={match.away_team} teams={teams} /><b>{teamDisplayName(match.away_team, teams, admin)}</b></div></div>
         {match.bracket_code && <div className="bracket-waiting">{match.resolution_error || 'Teams are filled automatically once both groups or preceding knockout matches are resolved.'}</div>}
         {admin && !match.bracket_code && <div className="score-edit">
           <div className="score-side"><span>{teams.find(team => team.name === match.home_team)?.short_name}</span><button disabled={busy || (match.status === 'final' && !superAdmin) || match.home_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.home_team })} aria-label={`Subtract goal from ${match.home_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.home_team })} aria-label={`Add goal for ${match.home_team}`}><Plus size={17} /></button></div>
           <span className="edit-caption">EDIT SCORE</span>
           <div className="score-side"><button disabled={busy || (match.status === 'final' && !superAdmin) || match.away_score === 0} onClick={() => void changeMatch(match, 'undo', { team: match.away_team })} aria-label={`Subtract goal from ${match.away_team}`}><Minus size={17} /></button><button className="plus-score" disabled={busy || (match.status === 'final' && !superAdmin)} onClick={() => void changeMatch(match, 'goal', { team: match.away_team })} aria-label={`Add goal for ${match.away_team}`}><Plus size={17} /></button><span>{teams.find(team => team.name === match.away_team)?.short_name}</span></div>
-          <div className="status-actions"><button onClick={() => beginCardCorrection(match)} disabled={busy}>Edit cards</button>{match.status !== 'live' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Start</button>}{match.status !== 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'final' })} disabled={busy}><Flag size={13} /> Final</button>}{superAdmin && match.status === 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Reopen</button>}{superAdmin && <button onClick={() => beginMatchCorrection(match)} disabled={busy}>Edit all</button>}</div>
+          <div className="status-actions"><button onClick={() => beginCardCorrection(match)} disabled={busy}>Edit cards</button>{match.status !== 'live' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Start</button>}{match.status !== 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'final' })} disabled={busy}><Flag size={13} /> Final</button>}{isKnockoutMatch(match) && match.status === 'final' && match.home_score === match.away_score && <button onClick={() => beginPenaltyCorrection(match)} disabled={busy}>{match.home_penalty_score === match.away_penalty_score ? 'Enter penalties' : 'Edit penalties'}</button>}{superAdmin && match.status === 'final' && <button onClick={() => void changeMatch(match, 'status', { status: 'live' })} disabled={busy}>Reopen</button>}{superAdmin && <button onClick={() => beginMatchCorrection(match)} disabled={busy}>Edit all</button>}</div>
         </div>}
+        {admin && !match.bracket_code && editingPenaltiesId === match.id && <form className="match-correction-form penalty-correction-form" onSubmit={event => void savePenaltyCorrection(event)}><h3>Knockout penalties · Regulation tied {match.home_score}–{match.away_score}</h3><p>Enter the current shoot-out totals. If they are still level, save the tie and enter the next round of kicks.</p><label>{teamDisplayName(match.home_team, teams, admin)} penalties<input required type="number" min="0" max="1000" step="1" value={penaltyCorrection.home_penalty_score} onChange={event => setPenaltyCorrection({ ...penaltyCorrection, home_penalty_score: event.target.value })} /></label><label>{teamDisplayName(match.away_team, teams, admin)} penalties<input required type="number" min="0" max="1000" step="1" value={penaltyCorrection.away_penalty_score} onChange={event => setPenaltyCorrection({ ...penaltyCorrection, away_penalty_score: event.target.value })} /></label><div className="match-correction-actions"><button className="entry-save" disabled={busy}>{busy ? 'Saving…' : 'Save penalty score'}</button><button type="button" className="entry-cancel" onClick={() => setEditingPenaltiesId(null)}>Cancel</button></div></form>}
+        {penaltyNeeded(match) && <div className="penalty-needed">Regulation is tied. Enter penalties to determine the winner and advance the bracket.</div>}
         {admin && !match.bracket_code && editingCardsId === match.id && <form className="match-correction-form match-card-form" onSubmit={event => void saveMatchCards(event)}>
           <h3>Cards &amp; fair play · Any match status</h3>
           <label>Home yellow cards<input required type="number" min="0" step="1" value={cardCorrection.home_yellow_cards} onChange={event => setCardCorrection({ ...cardCorrection, home_yellow_cards: event.target.value })} /></label>

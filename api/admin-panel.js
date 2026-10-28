@@ -96,6 +96,14 @@ export default async function adminPanel(req, res) {
     return send(res, 200, { role, data })
   }
 
+  if (body.mode === 'match_penalties') {
+    const { match_id: matchId, expected_version: expectedVersion, home_penalty_score: homePenaltyScore, away_penalty_score: awayPenaltyScore } = body
+    if (typeof matchId !== 'string' || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(homePenaltyScore) || homePenaltyScore < 0 || !Number.isSafeInteger(awayPenaltyScore) || awayPenaltyScore < 0 || homePenaltyScore > 1000 || awayPenaltyScore > 1000) return send(res, 400, { error: 'Enter non-negative whole-number penalty scores.' })
+    const { data, error } = await client.rpc('set_knockout_penalties_server', { p_match_id: matchId, p_expected_version: expectedVersion, p_home_penalty_score: homePenaltyScore, p_away_penalty_score: awayPenaltyScore, p_actor_role: role })
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
   if (body.mode === 'match_edit') {
     if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
     const { match_id: matchId, expected_version: expectedVersion, home_team: homeTeam, away_team: awayTeam, home_score: homeScore, away_score: awayScore, home_yellow_cards: homeYellowCards, away_yellow_cards: awayYellowCards, home_red_cards: homeRedCards, away_red_cards: awayRedCards, home_fair_play_score: homeFairPlay, away_fair_play_score: awayFairPlay, status, event_day: eventDay, kickoff_time: kickoffTime, venue, stage } = body
