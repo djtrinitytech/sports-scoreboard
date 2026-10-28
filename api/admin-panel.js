@@ -167,8 +167,16 @@ export default async function adminPanel(req, res) {
     const fullName = typeof body.full_name === 'string' ? body.full_name.trim() : ''
     const college = typeof body.college_name === 'string' ? body.college_name.trim() : ''
     const phone = typeof body.phone_number === 'string' ? body.phone_number.trim() : ''
-    if (typeof body.player_id !== 'string' || fullName.length < 1 || fullName.length > 100 || college.length > 120 || phone.length < 5 || phone.length > 30) return send(res, 400, { error: 'Enter a full name, a valid phone number, and an optional college.' })
-    const { data, error } = await client.rpc('correct_max_showdown_player_server', { p_player_id: body.player_id, p_full_name: fullName, p_college_name: college || null, p_phone_number: phone })
+    if (typeof body.player_id !== 'string' || fullName.length < 1 || fullName.length > 100 || college.length > 120 || phone.length < 5 || phone.length > 30 || !Number.isSafeInteger(body.legacy_points) || body.legacy_points < 0) return send(res, 400, { error: 'Enter a name, valid phone number, optional college, and non-negative carry-over points.' })
+    const { data, error } = await client.rpc('correct_max_showdown_player_server', { p_player_id: body.player_id, p_full_name: fullName, p_college_name: college || null, p_phone_number: phone, p_legacy_points: body.legacy_points })
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
+  if (body.mode === 'showdown_player_delete') {
+    if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
+    if (typeof body.player_id !== 'string') return send(res, 400, { error: 'Choose a registered player.' })
+    const { data, error } = await client.rpc('delete_max_showdown_player_server', { p_player_id: body.player_id })
     if (error) return send(res, 400, { error: error.message })
     return send(res, 200, { role, data })
   }
@@ -199,6 +207,14 @@ export default async function adminPanel(req, res) {
     const fields = ['player_one_points', 'player_two_points', 'player_one_goals', 'player_two_goals', 'player_one_pannas', 'player_two_pannas']
     if (typeof body.match_id !== 'string' || !Number.isSafeInteger(body.expected_version) || fields.some(field => !Number.isSafeInteger(body[field]) || body[field] < 0) || !['draft', 'live', 'final'].includes(body.status)) return send(res, 400, { error: 'Enter valid non-negative scores and match stats.' })
     const { data, error } = await client.rpc('correct_max_showdown_match_server', { p_match_id: body.match_id, p_expected_version: body.expected_version, p_one_points: body.player_one_points, p_two_points: body.player_two_points, p_one_goals: body.player_one_goals, p_two_goals: body.player_two_goals, p_one_pannas: body.player_one_pannas, p_two_pannas: body.player_two_pannas, p_status: body.status })
+    if (error) return send(res, 400, { error: error.message })
+    return send(res, 200, { role, data })
+  }
+
+  if (body.mode === 'showdown_match_delete') {
+    if (!superAdmin) return send(res, 403, { error: 'Super admin passcode required.' })
+    if (typeof body.match_id !== 'string' || !Number.isSafeInteger(body.expected_version)) return send(res, 400, { error: 'Refresh this fixture before deleting it.' })
+    const { data, error } = await client.rpc('delete_max_showdown_match_server', { p_match_id: body.match_id, p_expected_version: body.expected_version })
     if (error) return send(res, 400, { error: error.message })
     return send(res, 200, { role, data })
   }

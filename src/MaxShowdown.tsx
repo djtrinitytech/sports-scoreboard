@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, Flag, Plus, Search, Shield, UserPlus } from 'lucide-react'
+import { Check, Flag, Plus, Search, Shield, Trash2, UserPlus } from 'lucide-react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ShowdownMatch, ShowdownPlayer, ShowdownStanding } from './data'
 import './showdown.css'
@@ -9,7 +9,7 @@ type MatchRow = ShowdownMatch & { pending?: boolean }
 type ApiResult = { error?: string; data?: unknown; players?: ShowdownPlayer[]; matches?: ShowdownMatch[] }
 type StandingRow = ShowdownStanding & { pending?: boolean }
 type Correction = { player_one_points: string; player_two_points: string; player_one_goals: string; player_two_goals: string; player_one_pannas: string; player_two_pannas: string; status: ShowdownMatch['status'] }
-type PlayerCorrection = { full_name: string; college_name: string; phone_number: string }
+type PlayerCorrection = { full_name: string; college_name: string; phone_number: string; legacy_points: string }
 
 function playerStats(players: ShowdownPlayer[], matches: ShowdownMatch[]): ShowdownStanding[] {
   return players.map(player => {
@@ -52,7 +52,7 @@ export function MaxShowdown({ role, passcode, db, onAdminLogin }: { role: Role |
   const [phoneNumber, setPhoneNumber] = useState('')
   const [playerSearch, setPlayerSearch] = useState('')
   const [editingPlayer, setEditingPlayer] = useState('')
-  const [playerCorrection, setPlayerCorrection] = useState<PlayerCorrection>({ full_name: '', college_name: '', phone_number: '' })
+  const [playerCorrection, setPlayerCorrection] = useState<PlayerCorrection>({ full_name: '', college_name: '', phone_number: '', legacy_points: '0' })
   const [fixtureOne, setFixtureOne] = useState('')
   const [fixtureTwo, setFixtureTwo] = useState('')
   const [editingMatch, setEditingMatch] = useState('')
@@ -125,7 +125,7 @@ export function MaxShowdown({ role, passcode, db, onAdminLogin }: { role: Role |
 
   function beginPlayerCorrection(player: ShowdownPlayer) {
     setEditingPlayer(player.id)
-    setPlayerCorrection({ full_name: player.full_name, college_name: player.college_name ?? '', phone_number: player.phone_number ?? '' })
+    setPlayerCorrection({ full_name: player.full_name, college_name: player.college_name ?? '', phone_number: player.phone_number ?? '', legacy_points: String(player.legacy_points) })
   }
 
   async function correctPlayer(event: React.FormEvent, playerId: string) {
@@ -133,13 +133,34 @@ export function MaxShowdown({ role, passcode, db, onAdminLogin }: { role: Role |
     if (role !== 'super_admin' || saving) return
     setSaving(true); setError(''); setNotice('Saving player correction…')
     try {
-      const result = await callAdmin({ mode: 'showdown_player_edit', player_id: playerId, ...playerCorrection })
+      const result = await callAdmin({ mode: 'showdown_player_edit', player_id: playerId, ...playerCorrection, legacy_points: Number(playerCorrection.legacy_points) })
       const saved = result.data as ShowdownPlayer
       setPlayers(current => current.map(player => player.id === saved.id ? saved : player))
-      setStandings(current => current.map(row => row.player_id === saved.id ? { ...row, full_name: saved.full_name, college_name: saved.college_name } : row))
+      await refreshAdmin()
       setEditingPlayer(''); setNotice('Player details corrected · Synced')
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not correct player details.'); setNotice('Sync Failed') }
     finally { setSaving(false) }
+  }
+
+  async function deletePlayer(player: ShowdownPlayer) {
+    if (role !== 'super_admin' || saving || !window.confirm(`Delete ${player.full_name}? This also permanently removes their Max Showdown fixtures, scores, and carry-over records.`)) return
+    setSaving(true); setError(''); setNotice('Deleting participant…')
+    try {
+      await callAdmin({ mode: 'showdown_player_delete', player_id: player.id })
+      await refreshAdmin(); setNotice('Participant and associated scores deleted · Synced')
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not delete participant.'); setNotice('Sync Failed') }
+    finally { setSaving(false) }
+  }
+
+  async function deleteMatch(match: MatchRow) {
+    if (role !== 'super_admin' || savingMatch || match.pending || !window.confirm(`Delete this ${match.status} fixture and all of its scores? This cannot be undone.`)) return
+    setSavingMatch(match.id); setError(''); setNotice('Deleting fixture…')
+    try {
+      await callAdmin({ mode: 'showdown_match_delete', match_id: match.id, expected_version: match.version })
+      const nextMatches = matches.filter(item => item.id !== match.id)
+      setMatches(nextMatches); setStandings(playerStats(players, nextMatches)); setNotice('Fixture and its scores deleted · Synced')
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not delete fixture.'); setNotice('Sync Failed'); void refreshAdmin().catch(() => undefined) }
+    finally { setSavingMatch('') }
   }
 
   async function createFixture(event: React.FormEvent) {
@@ -231,7 +252,7 @@ export function MaxShowdown({ role, passcode, db, onAdminLogin }: { role: Role |
           <button className="panel-action" disabled={saving || !fullName.trim() || !phoneNumber.trim()}>{saving ? 'Saving…' : 'Register player'}</button>
         </form>
         <div className="showdown-roster-heading"><div><h3>Registered players</h3><p>Registration IDs are assigned automatically. Phone numbers are admin-only.</p></div><label className="roster-search"><Search size={15} /><input value={playerSearch} onChange={event => setPlayerSearch(event.target.value)} placeholder="Search name, ID or college" /></label></div>
-        <div className="showdown-roster">{visiblePlayers.map(player => <article className="showdown-roster-row" key={player.id}>{editingPlayer === player.id ? <form className="showdown-player-correction" onSubmit={event => void correctPlayer(event, player.id)}><label>Full name<input required maxLength={100} value={playerCorrection.full_name} onChange={event => setPlayerCorrection({ ...playerCorrection, full_name: event.target.value })} /></label><label>College · optional<input maxLength={120} value={playerCorrection.college_name} onChange={event => setPlayerCorrection({ ...playerCorrection, college_name: event.target.value })} /></label><label>Phone<input required type="tel" maxLength={30} value={playerCorrection.phone_number} onChange={event => setPlayerCorrection({ ...playerCorrection, phone_number: event.target.value })} /></label><div><button className="entry-save" disabled={saving}>Save</button><button type="button" className="entry-cancel" onClick={() => setEditingPlayer('')}>Cancel</button></div></form> : <><span className="showdown-rank"><UserPlus size={14} /></span><span className="roster-person"><b>{player.full_name}</b><small>{player.college_name || 'College not provided'} · {player.phone_number || 'Legacy entry · no phone on record'}</small></span><code>{player.registration_id}</code>{role === 'super_admin' && <button className="standings-refresh" onClick={() => beginPlayerCorrection(player)}>Edit</button>}</>}</article>)}{visiblePlayers.length === 0 && <div className="board-empty"><b>{players.length ? 'No players match your search.' : 'No players registered yet.'}</b></div>}</div>
+        <div className="showdown-roster">{visiblePlayers.map(player => <article className="showdown-roster-row" key={player.id}>{editingPlayer === player.id ? <form className="showdown-player-correction" onSubmit={event => void correctPlayer(event, player.id)}><label>Full name<input required maxLength={100} value={playerCorrection.full_name} onChange={event => setPlayerCorrection({ ...playerCorrection, full_name: event.target.value })} /></label><label>College · optional<input maxLength={120} value={playerCorrection.college_name} onChange={event => setPlayerCorrection({ ...playerCorrection, college_name: event.target.value })} /></label><label>Phone<input required type="tel" maxLength={30} value={playerCorrection.phone_number} onChange={event => setPlayerCorrection({ ...playerCorrection, phone_number: event.target.value })} /></label><label>Carry-over points<input required type="number" min="0" step="1" value={playerCorrection.legacy_points} onChange={event => setPlayerCorrection({ ...playerCorrection, legacy_points: event.target.value })} /></label><div><button className="entry-save" disabled={saving}>Save</button><button type="button" className="entry-cancel" onClick={() => setEditingPlayer('')}>Cancel</button></div></form> : <><span className="showdown-rank"><UserPlus size={14} /></span><span className="roster-person"><b>{player.full_name}</b><small>{player.college_name || 'College not provided'} · {player.phone_number || 'Legacy entry · no phone on record'} · {player.legacy_points} carry-over points</small></span><code>{player.registration_id}</code>{role === 'super_admin' && <><button className="standings-refresh" onClick={() => beginPlayerCorrection(player)}>Edit</button><button className="showdown-delete" disabled={saving} onClick={() => void deletePlayer(player)} aria-label={`Delete ${player.full_name} and all associated scores`} title="Delete player and all associated scores"><Trash2 size={15} /></button></>}</>}</article>)}{visiblePlayers.length === 0 && <div className="board-empty"><b>{players.length ? 'No players match your search.' : 'No players registered yet.'}</b></div>}</div>
       </div> : <div className="showdown-sector">
         <form className="showdown-fixture-form" onSubmit={event => void createFixture(event)}>
           <div><span className="kicker">NEW FIXTURE</span><h3>Draft a match</h3><p>Search registered players, then create the draft before the match starts.</p></div>
@@ -254,7 +275,7 @@ export function MaxShowdown({ role, passcode, db, onAdminLogin }: { role: Role |
               <button className="entry-cancel" disabled={savingMatch === match.id} onClick={() => void setMatchStatus(match, 'final')}><Check size={14} /> End match</button>
             </>}
             {match.status === 'final' && <span className="final-result">{match.player_one_points === match.player_two_points ? 'Draw · +1 point each' : `${match.player_one_points > match.player_two_points ? playerName(match.player_one_id) : playerName(match.player_two_id)} wins · +2 tournament points`}</span>}
-            {role === 'super_admin' && <button className="standings-refresh" onClick={() => beginCorrection(match)}>Edit match</button>}
+            {role === 'super_admin' && <div className="showdown-super-actions"><button className="standings-refresh" onClick={() => beginCorrection(match)}>Edit match</button><button className="showdown-delete" disabled={savingMatch === match.id} onClick={() => void deleteMatch(match)}><Trash2 size={14} /> Delete fixture</button></div>}
           </div>
           {role === 'super_admin' && editingMatch === match.id && <form className="showdown-correction" onSubmit={event => void correctMatch(event, match)}>
             <b>Super Admin · Correct this fixture</b>

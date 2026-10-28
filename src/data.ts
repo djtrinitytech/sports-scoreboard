@@ -20,6 +20,7 @@ export type Match = {
   version: number
   updated_at: string
 }
+export type KnockoutFixture = { code: string; stage: 'quarterfinal' | 'semifinal' | 'final' | 'third_place'; home_source: string; away_source: string; home_label: string; away_label: string; home_team: string | null; away_team: string | null; match_id: string | null; event_day: number; kickoff_time: string; venue: string; resolution_error: string | null }
 export type Team = { id: string; name: string; short_name: string; color: string; group_name: string | null; active: boolean }
 export type ShowdownEntry = { id: string; operation_id: string; participant_name: string; score: number; created_at: string; updated_at: string }
 export type ShowdownPlayer = { id: string; registration_id: string; full_name: string; college_name: string | null; phone_number: string | null; legacy_points: number; created_at: string }
